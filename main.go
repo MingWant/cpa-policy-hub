@@ -37,6 +37,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -915,7 +916,11 @@ func managementCreateKey(raw []byte) ([]byte, error) {
 	}
 	apiKey := strings.TrimSpace(rule.Key)
 	if apiKey == "" && strings.TrimSpace(rule.KeyHash) == "" {
-		apiKey = "cpa_" + randomHex(24)
+		generated, errGenerate := randomHex(24)
+		if errGenerate != nil {
+			return nil, errGenerate
+		}
+		apiKey = "cpa_" + generated
 		rule.Key = apiKey
 	}
 	currentLimiter.mu.Lock()
@@ -1201,12 +1206,12 @@ func mergeState(dst *persistedState, src persistedState) {
 func (l *limiter) findKeyByCredentialLocked(credential string) (keyRule, bool) {
 	hash := hashAPIKey(credential)
 	for _, rule := range l.configuredKeys {
-		if rule.KeyHash == hash {
+		if hashMatches(rule.KeyHash, hash) {
 			return rule, true
 		}
 	}
 	for _, rule := range l.state.Keys {
-		if rule.KeyHash == hash {
+		if hashMatches(rule.KeyHash, hash) {
 			return rule, true
 		}
 	}
@@ -1222,12 +1227,12 @@ func (l *limiter) resolveKeyIDLocked(value string) (string, bool) {
 	}
 	hash := hashAPIKey(value)
 	for _, rule := range l.configuredKeys {
-		if rule.KeyHash == hash {
+		if hashMatches(rule.KeyHash, hash) {
 			return rule.ID, true
 		}
 	}
 	for _, rule := range l.state.Keys {
-		if rule.KeyHash == hash {
+		if hashMatches(rule.KeyHash, hash) {
 			return rule.ID, true
 		}
 	}
@@ -2505,6 +2510,15 @@ func hashAPIKey(key string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+func hashMatches(storedHash string, candidateHash string) bool {
+	storedHash = normalizeHash(storedHash)
+	candidateHash = normalizeHash(candidateHash)
+	if !validSHA256Hash(storedHash) || !validSHA256Hash(candidateHash) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(storedHash), []byte(candidateHash)) == 1
+}
+
 func normalizeHash(hash string) string {
 	hash = strings.TrimSpace(hash)
 	if hash == "" {
@@ -2556,12 +2570,12 @@ func minuteKey(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04Z")
 }
 
-func randomHex(bytesLen int) string {
+func randomHex(bytesLen int) (string, error) {
 	buf := make([]byte, bytesLen)
 	if _, errRead := rand.Read(buf); errRead != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
+		return "", errRead
 	}
-	return hex.EncodeToString(buf)
+	return hex.EncodeToString(buf), nil
 }
 
 func jsonResponse(status int, v any) pluginapi.ManagementResponse {
@@ -2578,7 +2592,12 @@ func jsonHeaders() http.Header {
 }
 
 func htmlHeaders() http.Header {
-	return http.Header{"Content-Type": []string{"text/html; charset=utf-8"}}
+	return http.Header{
+		"Content-Type":            []string{"text/html; charset=utf-8"},
+		"X-Content-Type-Options":  []string{"nosniff"},
+		"Referrer-Policy":         []string{"no-referrer"},
+		"Content-Security-Policy": []string{"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"},
+	}
 }
 
 func statusHTML() string {
@@ -2611,8 +2630,8 @@ function show(tab){document.querySelectorAll('.tab').forEach(b=>b.classList.togg
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>show(b.dataset.tab));
 function pretty(v){return JSON.stringify(v,null,2)}
 async function call(path,opt){const r=await fetch(api+path,Object.assign({headers:{'Content-Type':'application/json'}},opt||{}));const t=await r.text();let v;try{v=JSON.parse(t)}catch(e){v={error:t}}if(!r.ok)throw new Error(v.message||v.error||r.statusText);return v}
-async function loadStatus(){try{const s=await call('/status');$('health').innerHTML='<span class="ok">Connected</span> v'+(s.version||'');$('statusRaw').textContent=pretty(s);$('metrics').innerHTML=['policies','configured_keys','managed_keys','tracked_keys','policy_events','policy_counters','active_counters'].map(k=>'<div class="metric"><span>'+k+'</span><b>'+(s[k]??0)+'</b></div>').join('');}catch(e){$('health').innerHTML='<span class="err">Management API unavailable</span>';$('statusRaw').textContent=String(e);}}
-async function loadKeys(){try{const d=await call('/keys');const rows=(d.keys||[]).map(k=>'<tr><td>'+esc(k.id)+'</td><td>'+esc(k.name||'')+'</td><td>'+esc(k.tenant||'')+'</td><td>'+esc(k.plan||'')+'</td><td>'+esc((k.allowed_models||[]).join(','))+'</td><td><button class="btn danger" onclick="deleteKey(\''+escAttr(k.id)+'\')">Delete</button></td></tr>').join('');$('keysTable').innerHTML='<table><thead><tr><th>ID</th><th>Name</th><th>Tenant</th><th>Plan</th><th>Models</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';}catch(e){$('keysTable').innerHTML='<p class="err">'+esc(String(e))+'</p>';}}
+async function loadStatus(){try{const s=await call('/status');$('health').textContent='Connected v'+(s.version||'');$('health').className='pill ok';$('statusRaw').textContent=pretty(s);$('metrics').innerHTML=['policies','configured_keys','managed_keys','tracked_keys','policy_events','policy_counters','active_counters'].map(k=>'<div class="metric"><span>'+k+'</span><b>'+esc(s[k]??0)+'</b></div>').join('');}catch(e){$('health').textContent='Management API unavailable';$('health').className='pill err';$('statusRaw').textContent=String(e);}}
+async function loadKeys(){try{const d=await call('/keys');const rows=(d.keys||[]).map(k=>'<tr><td>'+esc(k.id)+'</td><td>'+esc(k.name||'')+'</td><td>'+esc(k.tenant||'')+'</td><td>'+esc(k.plan||'')+'</td><td>'+esc((k.allowed_models||[]).join(','))+'</td><td><button class="btn danger" data-delete-key="'+escAttr(k.id)+'">Delete</button></td></tr>').join('');$('keysTable').innerHTML='<table><thead><tr><th>ID</th><th>Name</th><th>Tenant</th><th>Plan</th><th>Models</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';$('keysTable').querySelectorAll('[data-delete-key]').forEach(b=>b.onclick=()=>deleteKey(b.dataset.deleteKey));}catch(e){$('keysTable').innerHTML='<p class="err">'+esc(String(e))+'</p>';}}
 async function createKey(){const models=$('keyModels').value.split(',').map(x=>x.trim()).filter(Boolean);const body={id:$('keyId').value.trim(),name:$('keyName').value.trim(),key:$('keyPlain').value.trim(),tenant:$('keyTenant').value.trim(),plan:$('keyPlan').value.trim(),allowed_models:models};try{const d=await call('/keys',{method:'POST',body:JSON.stringify(body)});$('createKeyResult').textContent=pretty(d);loadKeys();}catch(e){$('createKeyResult').textContent=String(e);}}
 async function deleteKey(id){if(!confirm('Delete managed key '+id+'?'))return;await call('/keys?id='+encodeURIComponent(id),{method:'DELETE'});loadKeys();}
 async function loadUsage(){try{const d=await call('/usage');$('usageRaw').textContent=pretty(d.usage||{});$('policyUsageRaw').textContent=pretty({policy_usage:d.policy_usage||{},active:d.active||{}});}catch(e){$('usageRaw').textContent=String(e);}}
@@ -2623,7 +2642,7 @@ async function exportState(){const d=await call('/export');$('stateBox').value=p
 async function importState(replace){if(!confirm((replace?'Replace':'Merge')+' state?'))return;let state=JSON.parse($('stateBox').value||'{}');const d=await call('/import',{method:'POST',body:JSON.stringify({replace,state})});alert(pretty(d));loadAll();}
 function buildYaml(){const y='plugins:\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 1\n      storage_path: "cpa-policy-hub-state.json"\n      fail_closed: true\n      dry_run: false\n      auth:\n        exclusive: true\n        keys:\n          - id: "'+$('bKey').value+'"\n            key_hash: "'+$('bHash').value+'"\n            tenant: "'+$('bTenant').value+'"\n            allowed_models: ["'+$('bModel').value+'"]\n      policies:\n        - name: "'+$('bTenant').value+'-budget"\n          match:\n            keys: ["'+$('bKey').value+'"]\n          quota:\n            scope: "tenant"\n            daily_token_limit: '+$('bDaily').value+'\n            monthly_cost_limit: '+$('bCost').value+'\n            request_limit_per_minute: 120\n            concurrency_limit: 10\n';$('yamlOut').value=y;}
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-function escAttr(s){return esc(s).replace(/'/g,'&#39;')}
+function escAttr(s){return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 async function loadAll(){await loadStatus();await loadKeys();await loadUsage();await loadLogs();}
 loadAll();buildYaml();
 </script></body></html>`
