@@ -1,0 +1,12 @@
+/dist/
+/build/
+/bin/
+/*.dll
+/*.so
+/*.dylib
+/*.h
+/cpa-policy-hub-state.json
+/test-output
+/vendor/
+*.tmp
+*.log

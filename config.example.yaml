@@ -1,0 +1,59 @@
+plugins:
+  enabled: true
+  dir: "plugins"
+  store-sources:
+    - "https://raw.githubusercontent.com/YOUR_ORG/cpa-policy-hub/main/registry.json"
+  configs:
+    cpa-policy-hub:
+      enabled: true
+      priority: 1
+      storage_path: "cpa-policy-hub-state.json"
+      fail_closed: true
+      dry_run: false
+      expose_limit_headers: false
+
+      # Prefer key_hash in production. Hash format: sha256:<hex-encoded-sha256>
+      auth:
+        exclusive: true
+        keys:
+          - id: "dev"
+            name: "Development key"
+            key_hash: "sha256:REPLACE_WITH_SHA256_OF_KEY"
+            tenant: "team-a"
+            plan: "basic"
+            daily_token_limit: 100000
+            monthly_token_limit: 1000000
+            request_limit_per_minute: 60
+            allowed_models: ["*"]
+
+      pricing:
+        - model: "gpt-5*"
+          input_per_1m: 1.25
+          output_per_1m: 10
+          reasoning_per_1m: 10
+          cached_input_per_1m: 0.125
+          estimated_input_tokens: 2000
+          estimated_output_tokens: 1000
+
+      policies:
+        - name: "team-a-budget"
+          match:
+            keys: ["dev"]
+            models: ["*"]
+          quota:
+            scope: "tenant"
+            daily_token_limit: 100000
+            monthly_token_limit: 1000000
+            daily_cost_limit: 5
+            monthly_cost_limit: 100
+            request_limit_per_minute: 120
+            concurrency_limit: 10
+
+        - name: "force-responses-for-model"
+          match:
+            keys: ["dev"]
+            providers: ["openai"]
+            models: ["some-responses-only-model"]
+            request_paths: ["/chat/completions"]
+          interface:
+            force_interface: "responses"
