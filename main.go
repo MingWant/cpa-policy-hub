@@ -908,7 +908,10 @@ func registerManagement() ([]byte, error) {
 			{Method: http.MethodGet, Path: "/plugins/api-key-token-limiter/export"},
 			{Method: http.MethodPost, Path: "/plugins/api-key-token-limiter/import"},
 		},
-		Resources: []pluginapi.ResourceRoute{{Path: "/status", Menu: pluginDisplayName, Description: "Manage and inspect CPA gateway policy state."}},
+		Resources: []pluginapi.ResourceRoute{
+			{Path: "/index.html", Menu: pluginDisplayName, Description: "Manage and inspect CPA gateway policy state."},
+			{Path: "/status", Menu: pluginDisplayName, Description: "Manage and inspect CPA gateway policy state."},
+		},
 	})
 }
 
@@ -918,6 +921,10 @@ func handleManagement(raw []byte) ([]byte, error) {
 		return nil, errUnmarshal
 	}
 	path := strings.TrimSuffix(req.Path, "/")
+	resourcePrefix := "/v0/resource/plugins/" + pluginID
+	if req.Method == http.MethodGet && (path == resourcePrefix || path == resourcePrefix+"/index.html" || strings.HasPrefix(path, resourcePrefix+"/status")) {
+		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(statusHTML())})
+	}
 	if strings.HasSuffix(path, "/status") && req.Method == http.MethodGet {
 		return managementStatus(req)
 	}
@@ -961,23 +968,23 @@ func managementStatus(req managementRequest) ([]byte, error) {
 	currentLimiter.mu.Lock()
 	defer currentLimiter.mu.Unlock()
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
-		"plugin":          pluginID,
-		"name":            pluginDisplayName,
-		"legacy_plugin":   legacyPluginID,
-		"version":         pluginVersion,
-		"exclusive":       currentLimiter.cfg.Exclusive,
-		"storage_path":    currentLimiter.cfg.StoragePath,
-		"config_path":     currentLimiter.cfg.ConfigPath,
+		"plugin":                 pluginID,
+		"name":                   pluginDisplayName,
+		"legacy_plugin":          legacyPluginID,
+		"version":                pluginVersion,
+		"exclusive":              currentLimiter.cfg.Exclusive,
+		"storage_path":           currentLimiter.cfg.StoragePath,
+		"config_path":            currentLimiter.cfg.ConfigPath,
 		"manage_config_api_keys": currentLimiter.cfg.ManageConfigAPIKeys,
-		"policies":        len(currentLimiter.cfg.Policies),
-		"endpoint_rules":  len(currentLimiter.cfg.EndpointOverrides),
-		"configured_keys": len(currentLimiter.configuredKeys),
-		"managed_keys":    len(currentLimiter.state.Keys),
-		"tracked_keys":    len(currentLimiter.state.Usage),
-		"policy_events":   len(currentLimiter.state.PolicyLog),
-		"policy_counters": len(currentLimiter.state.Policies),
-		"active_counters": len(currentLimiter.state.Active),
-		"updated_at":      currentLimiter.state.UpdatedAt,
+		"policies":               len(currentLimiter.cfg.Policies),
+		"endpoint_rules":         len(currentLimiter.cfg.EndpointOverrides),
+		"configured_keys":        len(currentLimiter.configuredKeys),
+		"managed_keys":           len(currentLimiter.state.Keys),
+		"tracked_keys":           len(currentLimiter.state.Usage),
+		"policy_events":          len(currentLimiter.state.PolicyLog),
+		"policy_counters":        len(currentLimiter.state.Policies),
+		"active_counters":        len(currentLimiter.state.Active),
+		"updated_at":             currentLimiter.state.UpdatedAt,
 	}))
 }
 
@@ -2693,7 +2700,7 @@ func statusHTML() string {
 	</style>
 </head>
 <body><main>
-	<div class="top"><div class="title"><h1>CPA Policy Hub</h1><p>Embedded management UI for keys, usage, policies, counters, and config snippets.</p></div><div class="pill" id="health">Loading...</div></div>
+	<div class="top"><div class="title"><h1>CPA Policy Hub</h1><p>Embedded management UI for keys, usage, policies, counters, and config snippets.</p></div><div style="min-width:320px"><label>Management key</label><input id="managementKey" type="password" placeholder="remote-management.secret-key / MANAGEMENT_PASSWORD"><div class="row" style="margin-top:8px"><button class="btn secondary" onclick="saveManagementKey()">Use key</button><div class="pill" id="health">Loading...</div></div></div></div>
 	<div class="tabs">
 		<button class="tab active" data-tab="dashboard">Dashboard</button><button class="tab" data-tab="keys">Keys</button><button class="tab" data-tab="usage">Usage</button><button class="tab" data-tab="logs">Logs</button><button class="tab" data-tab="tools">Tools</button><button class="tab" data-tab="builder">Config Builder</button>
 	</div>
@@ -2706,11 +2713,13 @@ func statusHTML() string {
 </main>
 <script>
 const api='/v0/management/plugins/cpa-policy-hub';
+let managementKey=sessionStorage.getItem('cpaPolicyHubManagementKey')||'';
 const $=id=>document.getElementById(id);
+function saveManagementKey(){managementKey=$('managementKey').value.trim();if(managementKey){sessionStorage.setItem('cpaPolicyHubManagementKey',managementKey)}else{sessionStorage.removeItem('cpaPolicyHubManagementKey')}loadAll();}
 function show(tab){document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.view').forEach(v=>v.classList.toggle('hidden',v.id!==tab));}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>show(b.dataset.tab));
 function pretty(v){return JSON.stringify(v,null,2)}
-async function call(path,opt){const r=await fetch(api+path,Object.assign({headers:{'Content-Type':'application/json'}},opt||{}));const t=await r.text();let v;try{v=JSON.parse(t)}catch(e){v={error:t}}if(!r.ok)throw new Error(v.message||v.error||r.statusText);return v}
+async function call(path,opt){const o=Object.assign({},opt||{});const headers=Object.assign({'Content-Type':'application/json'},o.headers||{});if(managementKey)headers.Authorization='Bearer '+managementKey;o.headers=headers;const r=await fetch(api+path,o);const t=await r.text();let v;try{v=JSON.parse(t)}catch(e){v={error:t}}if(!r.ok)throw new Error(v.message||v.error||r.statusText);return v}
 async function loadStatus(){try{const s=await call('/status');$('health').textContent='Connected v'+(s.version||'');$('health').className='pill ok';$('statusRaw').textContent=pretty(s);$('metrics').innerHTML=['policies','configured_keys','managed_keys','tracked_keys','policy_events','policy_counters','active_counters'].map(k=>'<div class="metric"><span>'+k+'</span><b>'+esc(s[k]??0)+'</b></div>').join('');}catch(e){$('health').textContent='Management API unavailable';$('health').className='pill err';$('statusRaw').textContent=String(e);}}
 async function loadKeys(){try{const d=await call('/keys');const rows=(d.keys||[]).map(k=>'<tr><td>'+esc(k.id)+'</td><td>'+esc(k.name||'')+'</td><td>'+esc(k.tenant||'')+'</td><td>'+esc(k.plan||'')+'</td><td>'+esc((k.allowed_models||[]).join(','))+'</td><td><button class="btn danger" data-delete-key="'+escAttr(k.id)+'">Delete</button></td></tr>').join('');$('keysTable').innerHTML='<table><thead><tr><th>ID</th><th>Name</th><th>Tenant</th><th>Plan</th><th>Models</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';$('keysTable').querySelectorAll('[data-delete-key]').forEach(b=>b.onclick=()=>deleteKey(b.dataset.deleteKey));}catch(e){$('keysTable').innerHTML='<p class="err">'+esc(String(e))+'</p>';}}
 async function createKey(){const models=$('keyModels').value.split(',').map(x=>x.trim()).filter(Boolean);const body={id:$('keyId').value.trim(),name:$('keyName').value.trim(),key:$('keyPlain').value.trim(),tenant:$('keyTenant').value.trim(),plan:$('keyPlan').value.trim(),allowed_models:models};try{const d=await call('/keys',{method:'POST',body:JSON.stringify(body)});$('createKeyResult').textContent=pretty(d);loadKeys();}catch(e){$('createKeyResult').textContent=String(e);}}
@@ -2725,6 +2734,7 @@ function buildYaml(){const y='plugins:\n  enabled: true\n  dir: "plugins"\n  con
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function escAttr(s){return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 async function loadAll(){await loadStatus();await loadKeys();await loadUsage();await loadLogs();}
+if(managementKey)$('managementKey').value=managementKey;
 loadAll();buildYaml();
 </script></body></html>`
 	return page

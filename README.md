@@ -178,6 +178,14 @@ plugins:
 
 If the CPA process cannot find `config.yaml`, set `config_path` to the path visible inside the running CPA process/container, for example `/home/docker/CLIProxyAPI/config.yaml` on a host install.
 
+Open the embedded management page at:
+
+```text
+http://<cpa-host>:<api-port>/v0/resource/plugins/cpa-policy-hub/index.html
+```
+
+The resource page loads without a management header. Enter CPA's management key in the page; all data calls then use `Authorization: Bearer <management-key>` against `/v0/management/plugins/cpa-policy-hub/...`.
+
 ## Policy blocks
 
 The policy engine currently supports interface overrides plus request/response mutation actions:
