@@ -914,7 +914,6 @@ func registerManagement() ([]byte, error) {
 		},
 		Resources: []pluginapi.ResourceRoute{
 			{Path: "/index.html", Menu: pluginDisplayName, Description: "Manage and inspect CPA gateway policy state."},
-			{Path: "/status", Menu: pluginDisplayName, Description: "Manage and inspect CPA gateway policy state."},
 		},
 	})
 }
