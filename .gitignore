@@ -6,7 +6,9 @@
 /*.dylib
 /*.h
 /cpa-policy-hub-state.json
+/cpa-policy-hub-state.json.*
 /test-output
 /vendor/
+coverage.out
 *.tmp
 *.log

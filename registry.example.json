@@ -5,10 +5,10 @@
       "id": "cpa-policy-hub",
       "name": "CPA Policy Hub",
       "description": "Gateway-side policy hub for CLIProxyAPI: API key auth, quotas, usage accounting, and conditional upstream interface overrides.",
-      "author": "router-for-me",
+      "author": "MingWant",
       "version": "0.1.0",
-      "repository": "https://github.com/YOUR_ORG/cpa-policy-hub",
-      "homepage": "https://github.com/YOUR_ORG/cpa-policy-hub",
+      "repository": "https://github.com/MingWant/cpa-policy-hub",
+      "homepage": "https://github.com/MingWant/cpa-policy-hub",
       "license": "MIT",
       "tags": [
         "auth",
@@ -24,35 +24,35 @@
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/YOUR_ORG/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-windows-amd64.zip",
+            "url": "https://github.com/MingWant/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-windows-amd64.zip",
             "sha256": "REPLACE_WITH_WINDOWS_AMD64_ZIP_SHA256",
             "size": 0
           },
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/YOUR_ORG/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-linux-amd64.zip",
+            "url": "https://github.com/MingWant/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-linux-amd64.zip",
             "sha256": "REPLACE_WITH_LINUX_AMD64_ZIP_SHA256",
             "size": 0
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/YOUR_ORG/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-linux-arm64.zip",
+            "url": "https://github.com/MingWant/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-linux-arm64.zip",
             "sha256": "REPLACE_WITH_LINUX_ARM64_ZIP_SHA256",
             "size": 0
           },
           {
             "goos": "darwin",
             "goarch": "amd64",
-            "url": "https://github.com/YOUR_ORG/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-darwin-amd64.zip",
+            "url": "https://github.com/MingWant/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-darwin-amd64.zip",
             "sha256": "REPLACE_WITH_DARWIN_AMD64_ZIP_SHA256",
             "size": 0
           },
           {
             "goos": "darwin",
             "goarch": "arm64",
-            "url": "https://github.com/YOUR_ORG/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-darwin-arm64.zip",
+            "url": "https://github.com/MingWant/cpa-policy-hub/releases/download/v0.1.0/cpa-policy-hub-darwin-arm64.zip",
             "sha256": "REPLACE_WITH_DARWIN_ARM64_ZIP_SHA256",
             "size": 0
           }

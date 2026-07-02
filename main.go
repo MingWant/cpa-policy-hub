@@ -66,9 +66,7 @@ const (
 
 var currentLimiter = &limiter{
 	cfg: pluginConfig{
-		Exclusive:   true,
 		StoragePath: "cpa-policy-hub-state.json",
-		FailClosed:  true,
 	},
 	configuredKeys: map[string]keyRule{},
 	state: persistedState{
@@ -114,6 +112,7 @@ type identifierResponse struct {
 type pluginConfig struct {
 	Enabled                      bool                   `yaml:"enabled" json:"enabled"`
 	Priority                     int                    `yaml:"priority" json:"priority"`
+	TrafficEnabled               bool                   `yaml:"traffic_enabled" json:"traffic_enabled"`
 	Exclusive                    bool                   `yaml:"exclusive" json:"exclusive"`
 	StoragePath                  string                 `yaml:"storage_path" json:"storage_path"`
 	ConfigPath                   string                 `yaml:"config_path" json:"config_path"`
@@ -424,10 +423,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 
 func configure(raw []byte) error {
 	cfg := pluginConfig{
-		Exclusive:            true,
 		StoragePath:          "cpa-policy-hub-state.json",
-		ManageConfigAPIKeys:  true,
-		FailClosed:           true,
 		DefaultAllowedModels: []string{"*"},
 	}
 	var req lifecycleRequest
@@ -603,18 +599,19 @@ func firstNonEmpty(values ...string) string {
 
 func pluginRegistration() registration {
 	currentLimiter.mu.Lock()
-	exclusive := currentLimiter.cfg.Exclusive
+	runtimeCapabilities := currentLimiter.runtimeCapabilitiesLocked()
 	currentLimiter.mu.Unlock()
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             pluginDisplayName,
 			Version:          pluginVersion,
-			Author:           "router-for-me",
-			GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
-			Logo:             "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/docs/logo.png",
+			Author:           "MingWant",
+			GitHubRepository: "https://github.com/MingWant/cpa-policy-hub",
+			Logo:             "",
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "exclusive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Use this plugin as the exclusive frontend API key authenticator."},
+				{Name: "traffic_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Explicitly allow this plugin to participate in normal CPA traffic. Leave false for management-only mode."},
 				{Name: "storage_path", Type: pluginapi.ConfigFieldTypeString, Description: "JSON state file for managed keys, counters, and recent usage events."},
 				{Name: "config_path", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPA config.yaml path used when manage_config_api_keys is enabled."},
 				{Name: "manage_config_api_keys", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Import top-level CPA config.yaml api-keys into Policy Hub and apply default limits."},
@@ -632,18 +629,43 @@ func pluginRegistration() registration {
 				{Name: "keys", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional static key rules. Prefer key_hash over plaintext key."},
 			},
 		},
-		Capabilities: capabilities{
-			FrontendAuthProvider:          true,
-			FrontendAuthProviderExclusive: exclusive,
-			RequestInterceptor:            true,
-			ResponseInterceptor:           true,
-			UsagePlugin:                   true,
-			ManagementAPI:                 true,
-		},
+		Capabilities: runtimeCapabilities,
 	}
 }
 
+func (l *limiter) trafficEnabledLocked() bool {
+	caps := l.runtimeCapabilitiesLocked()
+	return caps.FrontendAuthProvider || caps.RequestInterceptor || caps.ResponseInterceptor || caps.UsagePlugin
+}
+
+func (l *limiter) runtimeCapabilitiesLocked() capabilities {
+	if !l.cfg.TrafficEnabled {
+		return capabilities{ManagementAPI: true}
+	}
+	hasAuthKeys := len(l.configuredKeys) > 0 || len(l.state.Keys) > 0
+	hasRequestPolicies := len(l.cfg.Policies) > 0 || len(l.cfg.EndpointOverrides) > 0
+	hasResponsePolicies := len(l.cfg.Policies) > 0 || l.cfg.ExposeLimitHeaders
+	hasUsage := hasAuthKeys || len(l.cfg.Policies) > 0 || len(l.cfg.Pricing) > 0
+	return capabilities{
+		FrontendAuthProvider:          hasAuthKeys,
+		FrontendAuthProviderExclusive: hasAuthKeys && l.cfg.Exclusive,
+		RequestInterceptor:            hasRequestPolicies,
+		ResponseInterceptor:           hasResponsePolicies,
+		UsagePlugin:                   hasUsage,
+		ManagementAPI:                 true,
+	}
+}
+
+func (l *limiter) trafficConfigEnabled() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.cfg.TrafficEnabled
+}
+
 func authenticate(raw []byte) ([]byte, error) {
+	if !currentLimiter.trafficConfigEnabled() {
+		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
+	}
 	var req pluginapi.FrontendAuthRequest
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
@@ -721,6 +743,9 @@ func authenticate(raw []byte) ([]byte, error) {
 }
 
 func interceptRequest(raw []byte) ([]byte, error) {
+	if !currentLimiter.trafficConfigEnabled() {
+		return okEnvelope(pluginapi.RequestInterceptResponse{})
+	}
 	var req pluginapi.RequestInterceptRequest
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
@@ -768,6 +793,9 @@ func interceptRequest(raw []byte) ([]byte, error) {
 }
 
 func interceptResponse(raw []byte) ([]byte, error) {
+	if !currentLimiter.trafficConfigEnabled() {
+		return okEnvelope(pluginapi.ResponseInterceptResponse{})
+	}
 	var req pluginapi.ResponseInterceptRequest
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
@@ -809,6 +837,9 @@ func interceptResponse(raw []byte) ([]byte, error) {
 }
 
 func handleUsage(raw []byte) ([]byte, error) {
+	if !currentLimiter.trafficConfigEnabled() {
+		return okEnvelope(struct{}{})
+	}
 	var record pluginapi.UsageRecord
 	if errUnmarshal := json.Unmarshal(raw, &record); errUnmarshal != nil {
 		return nil, errUnmarshal
@@ -975,6 +1006,9 @@ func managementStatus(req managementRequest) ([]byte, error) {
 		"name":                   pluginDisplayName,
 		"legacy_plugin":          legacyPluginID,
 		"version":                pluginVersion,
+		"capabilities":           currentLimiter.runtimeCapabilitiesLocked(),
+		"traffic_enabled":        currentLimiter.trafficEnabledLocked(),
+		"traffic_config_enabled": currentLimiter.cfg.TrafficEnabled,
 		"exclusive":              currentLimiter.cfg.Exclusive,
 		"storage_path":           currentLimiter.cfg.StoragePath,
 		"config_path":            currentLimiter.cfg.ConfigPath,
@@ -2717,9 +2751,9 @@ func statusHTML() string {
 </main>
 <script>
 const api='/v0/management/plugins/cpa-policy-hub';
-let managementKey=sessionStorage.getItem('cpaPolicyHubManagementKey')||'';
+let managementKey='';sessionStorage.removeItem('cpaPolicyHubManagementKey');
 const $=id=>document.getElementById(id);
-function saveManagementKey(){managementKey=$('managementKey').value.trim();if(managementKey){sessionStorage.setItem('cpaPolicyHubManagementKey',managementKey)}else{sessionStorage.removeItem('cpaPolicyHubManagementKey')}loadAll();}
+function saveManagementKey(){managementKey=$('managementKey').value.trim();sessionStorage.removeItem('cpaPolicyHubManagementKey');loadAll();}
 function show(tab){document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.view').forEach(v=>v.classList.toggle('hidden',v.id!==tab));}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>show(b.dataset.tab));
 function pretty(v){return JSON.stringify(v,null,2)}
@@ -2734,10 +2768,10 @@ async function resetTarget(t){if(!confirm('Reset '+t+'?'))return;const d=await c
 async function resetFromForm(){const body={target:$('resetTarget').value,id:$('resetId').value.trim()};try{$('resetResult').textContent=pretty(await call('/reset',{method:'POST',body:JSON.stringify(body)}));loadAll();}catch(e){$('resetResult').textContent=String(e);}}
 async function exportState(){const d=await call('/export');$('stateBox').value=pretty(d.state||{});}
 async function importState(replace){if(!confirm((replace?'Replace':'Merge')+' state?'))return;let state=JSON.parse($('stateBox').value||'{}');const d=await call('/import',{method:'POST',body:JSON.stringify({replace,state})});alert(pretty(d));loadAll();}
-function buildYaml(){const y='plugins:\n  enabled: true\n  dir: "plugins"\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 1\n      storage_path: "cpa-policy-hub-state.json"\n      config_path: "config.yaml"\n      manage_config_api_keys: true\n      fail_closed: true\n      dry_run: false\n      default_daily_token_limit: '+$('bDaily').value+'\n      default_monthly_token_limit: 1000000\n      default_request_limit_per_minute: 60\n      default_allowed_models: ["'+$('bModel').value+'"]\n      auth:\n        exclusive: true\n      policies:\n        - name: "'+$('bTenant').value+'-budget"\n          match:\n            keys: ["config_api_key_*"]\n          quota:\n            scope: "tenant"\n            daily_token_limit: '+$('bDaily').value+'\n            monthly_cost_limit: '+$('bCost').value+'\n            request_limit_per_minute: 120\n            concurrency_limit: 10\n';$('yamlOut').value=y;}
+function buildYaml(){const y='plugins:\n  enabled: true\n  dir: "plugins"\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 100\n      storage_path: "cpa-policy-hub-state.json"\n      traffic_enabled: false\n      exclusive: false\n      manage_config_api_keys: false\n      fail_closed: false\n      dry_run: true\n      expose_limit_headers: false\n      default_allowed_models: ["*"]\n      default_daily_token_limit: 0\n      default_monthly_token_limit: 0\n      default_request_limit_per_minute: 0\n      auth:\n        exclusive: false\n        keys: []\n      pricing: []\n      policies: []\n      endpoint_overrides: []\n';$('yamlOut').value=y;}
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function escAttr(s){return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
-async function loadAll(){await loadStatus();await loadKeys();await loadUsage();await loadLogs();}
+async function loadAll(){if(!managementKey){$('health').textContent='Enter management key';$('health').className='pill';$('statusRaw').textContent='Paste the CPA management key first. No Management API requests are sent until a key is provided.';return;}await loadStatus();if(!$('health').className.includes('ok'))return;await loadKeys();await loadUsage();await loadLogs();}
 if(managementKey)$('managementKey').value=managementKey;
 loadAll();buildYaml();
 </script></body></html>`

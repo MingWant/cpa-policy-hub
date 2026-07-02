@@ -1,4 +1,4 @@
-module github.com/YOUR_ORG/cpa-policy-hub
+module github.com/MingWant/cpa-policy-hub
 
 go 1.26
 

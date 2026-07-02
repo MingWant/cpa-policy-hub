@@ -1,61 +1,30 @@
 plugins:
   enabled: true
   dir: "plugins"
-  store-sources:
-    - "https://raw.githubusercontent.com/YOUR_ORG/cpa-policy-hub/main/registry.json"
   configs:
     cpa-policy-hub:
       enabled: true
-      priority: 1
+      priority: 100
       storage_path: "cpa-policy-hub-state.json"
-      # Import and manage top-level CPA/CPAMC api-keys from config.yaml.
-      # Use an absolute path when CPA runs from another working directory/container path.
-      config_path: "/home/docker/CLIProxyAPI/config.yaml"
-      manage_config_api_keys: true
-      # Keep registration alive even if config_path is temporarily wrong.
-      # Runtime policy checks still fail closed by default after the plugin is loaded.
+      # Safe default: management UI only. This does not read, authenticate,
+      # intercept, mutate, rate-limit, or record normal CPA traffic.
+      traffic_enabled: false
+      exclusive: false
+      config_path: ""
+      manage_config_api_keys: false
       fail_closed: false
-      dry_run: false
+      dry_run: true
       expose_limit_headers: false
-      default_daily_token_limit: 100000
-      default_monthly_token_limit: 1000000
-      default_request_limit_per_minute: 60
+      default_daily_token_limit: 0
+      default_monthly_token_limit: 0
+      default_request_limit_per_minute: 0
       default_allowed_models: ["*"]
 
-      # Optional extra plugin-managed keys. CPA/CPAMC top-level api-keys are imported automatically above.
-      # Prefer key_hash in production. Hash format: sha256:<hex-encoded-sha256>
+      # Add keys/policies only after verifying the management page works.
       auth:
-        exclusive: true
+        exclusive: false
         keys: []
 
-      pricing:
-        - model: "gpt-5*"
-          input_per_1m: 1.25
-          output_per_1m: 10
-          reasoning_per_1m: 10
-          cached_input_per_1m: 0.125
-          estimated_input_tokens: 2000
-          estimated_output_tokens: 1000
-
-      policies:
-        - name: "team-a-budget"
-          match:
-            keys: ["config_api_key_*"]
-            models: ["*"]
-          quota:
-            scope: "tenant"
-            daily_token_limit: 100000
-            monthly_token_limit: 1000000
-            daily_cost_limit: 5
-            monthly_cost_limit: 100
-            request_limit_per_minute: 120
-            concurrency_limit: 10
-
-        - name: "force-responses-for-model"
-          match:
-            keys: ["config_api_key_*"]
-            providers: ["openai"]
-            models: ["some-responses-only-model"]
-            request_paths: ["/chat/completions"]
-          interface:
-            force_interface: "responses"
+      pricing: []
+      policies: []
+      endpoint_overrides: []

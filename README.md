@@ -23,97 +23,67 @@ For portable installation/update across CPA systems, publish the plugin through 
 From this repository root:
 
 ```bash
-go build -buildmode=c-shared -o dist/cpa-policy-hub.dll .
+make build-linux
 ```
 
-Use `.so` on Linux or `.dylib` on macOS.
+Manual equivalents:
+
+```bash
+mkdir -p dist
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o dist/cpa-policy-hub.so .
+```
+
+Use `.so` on Linux, `.dylib` on macOS, or `.dll` on Windows. The plugin requires CGO because it is built as a dynamic library.
+
+## Recommended deployment order
+
+1. Build `cpa-policy-hub.so` on the target Linux server.
+2. Put it under CPA's plugin directory, for example `/home/docker/CLIProxyAPI/plugins/cpa-policy-hub.so`.
+3. If CPA runs in Docker, mount the host plugin directory into the container:
+
+   ```yaml
+   volumes:
+     - ./plugins:/CLIProxyAPI/plugins
+   ```
+
+4. Start with the safe config below. Confirm `/status` reports `traffic_enabled: false`.
+5. Only then switch to advanced takeover mode if you want this plugin to authenticate/manage existing CPA `api-keys`.
 
 ## Config
 
 ```yaml
 plugins:
   enabled: true
-  dir: "examples/plugin/bin"
+  dir: "plugins"
   configs:
     cpa-policy-hub:
       enabled: true
-      priority: 1
+      priority: 100
       storage_path: "cpa-policy-hub-state.json"
-      # Directly import and manage CPA/CPAMC top-level api-keys from config.yaml.
-      # Use an absolute path if CPA's working directory is not the config directory.
-      config_path: "config.yaml"
-      manage_config_api_keys: true
-      fail_closed: true
-      dry_run: false
-      expose_limit_headers: false
-      default_daily_token_limit: 100000
-      default_monthly_token_limit: 1000000
-      default_request_limit_per_minute: 60
-      default_allowed_models: ["*"]
 
-      pricing:
-        - model: "gpt-5*"
-          input_per_1m: 1.25
-          output_per_1m: 10
-          reasoning_per_1m: 10
-          cached_input_per_1m: 0.125
-          estimated_input_tokens: 2000
-          estimated_output_tokens: 1000
+      # Safe default: management UI only. The plugin does not touch normal CPA traffic.
+      traffic_enabled: false
+      exclusive: false
+      manage_config_api_keys: false
+      fail_closed: false
+      dry_run: true
+      expose_limit_headers: false
+
+      default_allowed_models: ["*"]
+      default_daily_token_limit: 0
+      default_monthly_token_limit: 0
+      default_request_limit_per_minute: 0
 
       auth:
-        exclusive: true
-        # Optional additional plugin-managed keys. Top-level CPA api-keys are imported automatically when manage_config_api_keys is true.
-        keys:
-          - id: "dev"
-            name: "Development key"
-            key: "dev-secret-change-me"
-            tenant: "team-a"
-            plan: "basic"
-            daily_token_limit: 10000
-            request_limit_per_minute: 10
-            allowed_models: ["*"]
+        exclusive: false
+        keys: []
 
-      policies:
-        - name: "force-responses-for-dev"
-          deny: false
-          message: "This request is blocked by CPA Policy Hub"
-          match:
-            keys: ["dev"]
-            providers: ["openai"]
-            models: ["some-responses-only-model"]
-            request_paths: ["/chat/completions"]
-          interface:
-            force_interface: "responses"
-          quota:
-            scope: "tenant"
-            daily_token_limit: 100000
-            monthly_token_limit: 1000000
-            daily_cost_limit: 5
-            monthly_cost_limit: 100
-            request_limit_per_minute: 60
-            concurrency_limit: 3
-            daily_request_limit: 1000
-          request:
-            set_headers:
-              X-Team: "team-a"
-            delete_headers: ["X-Debug"]
-            max_tokens:
-              max: 4096
-            temperature:
-              min: 0
-              max: 1
-            reasoning_effort:
-              deny: ["high", "xhigh"]
-              replace: "medium"
-            set_json:
-              metadata.policy: "force-responses-for-dev"
-            delete_json: ["debug"]
-          response:
-            delete_headers: ["X-Internal-Debug"]
-            set_headers:
-              X-Policy-Hub: "matched"
-            delete_json: ["debug", "internal"]
+      pricing: []
+      policies: []
+      endpoint_overrides: []
 ```
+
+With this default config, the plugin only registers its Management API/resource page. It does not authenticate, intercept, mutate, rate-limit, or record normal CPA traffic.
 
 Prefer `key_hash` over plaintext `key` in production. Hashes are SHA-256 values with an optional `sha256:` prefix.
 
@@ -150,7 +120,7 @@ For new installs, prefer `cpa-policy-hub` and the `auth` / `policies` blocks.
 
 ### Manage CPAMC `api-keys` directly
 
-Set `manage_config_api_keys: true` to let the plugin read the top-level CPA/CPAMC `api-keys` from `config.yaml`, hash them internally, and apply the plugin default limits/policies to them. Keep `auth.exclusive: true` so the plugin becomes the frontend authenticator for the same client keys.
+Advanced takeover mode only. First verify the safe management-only config above. Then set `traffic_enabled: true` and `manage_config_api_keys: true` to let the plugin read the top-level CPA/CPAMC `api-keys` from `config.yaml`, hash them internally, and apply plugin limits/policies to them. `auth.exclusive: true` makes the plugin the frontend authenticator for the same client keys; a wrong config can block calls.
 
 ```yaml
 api-keys:
@@ -165,9 +135,10 @@ plugins:
       enabled: true
       priority: 1
       storage_path: "cpa-policy-hub-state.json"
+      traffic_enabled: true
       config_path: "config.yaml"
       manage_config_api_keys: true
-      fail_closed: true
+      fail_closed: false
       default_daily_token_limit: 100000
       default_monthly_token_limit: 1000000
       default_request_limit_per_minute: 60
@@ -176,7 +147,7 @@ plugins:
         exclusive: true
 ```
 
-If the CPA process cannot find `config.yaml`, set `config_path` to the path visible inside the running CPA process/container, for example `/home/docker/CLIProxyAPI/config.yaml` on a host install.
+  If the CPA process cannot find `config.yaml`, set `config_path` to the path visible inside the running CPA process/container. For Docker with `/CLIProxyAPI` as the container workdir, use `/CLIProxyAPI/config.yaml`; do not use the host path unless CPA runs directly on the host. See `examples/takeover.config.yaml` for a complete takeover-mode example.
 
 Open the embedded management page at:
 
@@ -421,7 +392,7 @@ Authenticated routes are exposed under `/v0/management`:
 
 Legacy `/v0/management/plugins/api-key-token-limiter/...` routes are also available.
 
-The embedded browser UI is available at `/v0/resource/plugins/cpa-policy-hub/status`.
+The embedded browser UI is available at `/v0/resource/plugins/cpa-policy-hub/index.html`.
 
 The UI includes:
 
@@ -490,13 +461,19 @@ plugins:
   enabled: true
   dir: "plugins"
   store-sources:
-    - "https://raw.githubusercontent.com/YOUR_ORG/api-key-token-limiter-plugin/main/registry.json"
+    - "https://raw.githubusercontent.com/MingWant/cpa-policy-hub/main/registry.json"
   configs:
     cpa-policy-hub:
       enabled: true
-      priority: 1
+      priority: 100
+      traffic_enabled: false
+      manage_config_api_keys: false
+      fail_closed: false
+      dry_run: true
       auth:
-        exclusive: true
+        exclusive: false
+        keys: []
+      policies: []
 ```
 
 Then install/update the plugin from CPAMC's plugin store page. This keeps the plugin lifecycle independent from official CPA binary updates.

@@ -1,0 +1,40 @@
+# Advanced takeover mode. Use only after the safe config in config.example.yaml
+# has loaded successfully and the management page works.
+#
+# Docker note: config_path must be visible inside the CPA container/process.
+# For the standard container workdir, use /CLIProxyAPI/config.yaml.
+
+api-keys:
+  - "sk-client-a"
+  - "sk-client-b"
+
+plugins:
+  enabled: true
+  dir: "plugins"
+  configs:
+    cpa-policy-hub:
+      enabled: true
+      priority: 1
+      storage_path: "cpa-policy-hub-state.json"
+
+      # Import top-level CPA api-keys and let this plugin authenticate them.
+      traffic_enabled: true
+      config_path: "/CLIProxyAPI/config.yaml"
+      manage_config_api_keys: true
+      exclusive: true
+      fail_closed: false
+      dry_run: false
+      expose_limit_headers: false
+
+      default_allowed_models: ["*"]
+      default_daily_token_limit: 100000
+      default_monthly_token_limit: 1000000
+      default_request_limit_per_minute: 60
+
+      auth:
+        exclusive: true
+        keys: []
+
+      pricing: []
+      policies: []
+      endpoint_overrides: []

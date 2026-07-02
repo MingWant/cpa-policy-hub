@@ -60,14 +60,20 @@ plugins:
   enabled: true
   dir: "plugins"
   store-sources:
-    - "https://raw.githubusercontent.com/YOUR_ORG/api-key-token-limiter-plugin/main/registry.json"
+    - "https://raw.githubusercontent.com/MingWant/cpa-policy-hub/main/registry.json"
   configs:
     cpa-policy-hub:
       enabled: true
-      priority: 1
+      priority: 100
       storage_path: "cpa-policy-hub-state.json"
+      traffic_enabled: false
+      manage_config_api_keys: false
+      fail_closed: false
+      dry_run: true
       auth:
-        exclusive: true
+        exclusive: false
+        keys: []
+      policies: []
 ```
 
 The plugin store accepts direct-install registries with `schema_version: 2`. See `registry.example.json` for the expected shape.
@@ -76,7 +82,7 @@ The plugin store accepts direct-install registries with `schema_version: 2`. See
 
 To ship a new plugin version:
 
-1. Bump `pluginVersion` in `go/main.go`.
+1. Bump `pluginVersion` in `main.go`.
 2. Build all platform zips.
 3. Upload zips to a new GitHub Release tag such as `v0.2.0`.
 4. Update `registry.json` or `registry.example.json`:
