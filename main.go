@@ -670,7 +670,7 @@ func interceptRequest(raw []byte) ([]byte, error) {
 		headers.Set("X-CLIProxy-Policy-Hub-Dry-Run", "true")
 	}
 	if req.ToFormat != "" {
-		if target, matched := currentLimiter.endpointOverride(req); matched {
+		if target, matched := currentLimiter.endpointOverride(req); matched != "" {
 			if target != "" {
 				headers.Set(interfaceOverrideHeader, target)
 				headers.Set(interfaceOverrideMatchHeader, matched)
