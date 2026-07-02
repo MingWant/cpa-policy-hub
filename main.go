@@ -423,9 +423,11 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 
 func configure(raw []byte) error {
 	cfg := pluginConfig{
-		Exclusive:   true,
-		StoragePath: "cpa-policy-hub-state.json",
-		FailClosed:  true,
+		Exclusive:            true,
+		StoragePath:          "cpa-policy-hub-state.json",
+		ManageConfigAPIKeys:  true,
+		FailClosed:           true,
+		DefaultAllowedModels: []string{"*"},
 	}
 	var req lifecycleRequest
 	if len(raw) > 0 {
@@ -503,10 +505,22 @@ func normalizePolicyConfigAliases(cfg *pluginConfig) {
 
 func loadConfigAPIKeys(configPath string) ([]string, error) {
 	path := strings.TrimSpace(configPath)
+	paths := []string{path}
 	if path == "" {
-		path = "config.yaml"
+		paths = []string{"config.yaml", "./config.yaml", "/home/docker/CLIProxyAPI/config.yaml"}
 	}
-	raw, errRead := os.ReadFile(path)
+	var raw []byte
+	var errRead error
+	for _, candidate := range paths {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		raw, errRead = os.ReadFile(candidate)
+		if errRead == nil {
+			break
+		}
+	}
 	if errRead != nil {
 		return nil, errRead
 	}
@@ -953,6 +967,8 @@ func managementStatus(req managementRequest) ([]byte, error) {
 		"version":         pluginVersion,
 		"exclusive":       currentLimiter.cfg.Exclusive,
 		"storage_path":    currentLimiter.cfg.StoragePath,
+		"config_path":     currentLimiter.cfg.ConfigPath,
+		"manage_config_api_keys": currentLimiter.cfg.ManageConfigAPIKeys,
 		"policies":        len(currentLimiter.cfg.Policies),
 		"endpoint_rules":  len(currentLimiter.cfg.EndpointOverrides),
 		"configured_keys": len(currentLimiter.configuredKeys),
@@ -2705,7 +2721,7 @@ async function resetTarget(t){if(!confirm('Reset '+t+'?'))return;const d=await c
 async function resetFromForm(){const body={target:$('resetTarget').value,id:$('resetId').value.trim()};try{$('resetResult').textContent=pretty(await call('/reset',{method:'POST',body:JSON.stringify(body)}));loadAll();}catch(e){$('resetResult').textContent=String(e);}}
 async function exportState(){const d=await call('/export');$('stateBox').value=pretty(d.state||{});}
 async function importState(replace){if(!confirm((replace?'Replace':'Merge')+' state?'))return;let state=JSON.parse($('stateBox').value||'{}');const d=await call('/import',{method:'POST',body:JSON.stringify({replace,state})});alert(pretty(d));loadAll();}
-function buildYaml(){const y='plugins:\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 1\n      storage_path: "cpa-policy-hub-state.json"\n      fail_closed: true\n      dry_run: false\n      auth:\n        exclusive: true\n        keys:\n          - id: "'+$('bKey').value+'"\n            key_hash: "'+$('bHash').value+'"\n            tenant: "'+$('bTenant').value+'"\n            allowed_models: ["'+$('bModel').value+'"]\n      policies:\n        - name: "'+$('bTenant').value+'-budget"\n          match:\n            keys: ["'+$('bKey').value+'"]\n          quota:\n            scope: "tenant"\n            daily_token_limit: '+$('bDaily').value+'\n            monthly_cost_limit: '+$('bCost').value+'\n            request_limit_per_minute: 120\n            concurrency_limit: 10\n';$('yamlOut').value=y;}
+function buildYaml(){const y='plugins:\n  enabled: true\n  dir: "plugins"\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 1\n      storage_path: "cpa-policy-hub-state.json"\n      config_path: "config.yaml"\n      manage_config_api_keys: true\n      fail_closed: true\n      dry_run: false\n      default_daily_token_limit: '+$('bDaily').value+'\n      default_monthly_token_limit: 1000000\n      default_request_limit_per_minute: 60\n      default_allowed_models: ["'+$('bModel').value+'"]\n      auth:\n        exclusive: true\n      policies:\n        - name: "'+$('bTenant').value+'-budget"\n          match:\n            keys: ["config_api_key_*"]\n          quota:\n            scope: "tenant"\n            daily_token_limit: '+$('bDaily').value+'\n            monthly_cost_limit: '+$('bCost').value+'\n            request_limit_per_minute: 120\n            concurrency_limit: 10\n';$('yamlOut').value=y;}
 function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function escAttr(s){return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 async function loadAll(){await loadStatus();await loadKeys();await loadUsage();await loadLogs();}
