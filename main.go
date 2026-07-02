@@ -3269,6 +3269,8 @@ async function loadUsage(){try{$('usageBox').textContent=pretty(await call('/usa
 }
 
 func statusHTMLPage() string {
+	return finalStatusHTML()
+
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CPA Policy Hub</title><style>
 :root{color-scheme:dark;--bg:#020617;--panel:#0f172a;--card:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--blue:#38bdf8;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444}*{box-sizing:border-box}body{margin:0;font:14px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:linear-gradient(135deg,#020617,#111827 50%,#172554);color:var(--text)}header{padding:28px 32px 18px;border-bottom:1px solid rgba(255,255,255,.08)}h1{margin:0 0 8px;font-size:28px}h2{margin:0 0 10px}.muted{color:var(--muted)}main{padding:24px 32px 42px;display:grid;gap:18px}.bar,.grid,.split{display:grid;gap:16px}.bar{grid-template-columns:1fr auto}.grid{grid-template-columns:repeat(4,minmax(150px,1fr))}.split{grid-template-columns:minmax(520px,1.35fr) minmax(360px,.9fr)}.card{background:rgba(15,23,42,.86);border:1px solid rgba(148,163,184,.22);border-radius:18px;box-shadow:0 18px 50px rgba(0,0,0,.28);padding:18px}.stat{font-size:28px;font-weight:800;margin-top:4px}.pill{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--muted)}.ok{color:var(--ok);border-color:rgba(34,197,94,.45)}.warn{color:var(--warn);border-color:rgba(245,158,11,.45)}.bad{color:var(--bad);border-color:rgba(239,68,68,.45)}input,select,textarea,button{font:inherit;border-radius:10px;border:1px solid var(--line);background:#020617;color:var(--text);padding:10px 12px}textarea{width:100%;min-height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}button{cursor:pointer;background:#0f172a}button.primary{background:linear-gradient(135deg,#0284c7,#2563eb);border:0;font-weight:700}button.danger{border-color:rgba(239,68,68,.55);color:#fecaca}.form{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.form .full{grid-column:1/-1}label{display:grid;gap:6px;color:var(--muted)}label span{font-size:12px;text-transform:uppercase;letter-spacing:.04em}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid rgba(148,163,184,.18);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.actions{display:flex;gap:8px;flex-wrap:wrap}.tabs{display:flex;gap:8px;flex-wrap:wrap}.tab{padding:9px 12px}.tab.active{background:#1d4ed8}.hidden{display:none}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.notice{border-left:4px solid var(--blue);padding:10px 12px;background:rgba(56,189,248,.09);border-radius:12px}.toast{position:fixed;right:20px;bottom:20px;max-width:520px;background:#020617;border:1px solid var(--line);border-radius:14px;padding:12px 14px;box-shadow:0 20px 60px rgba(0,0,0,.35)}@media(max-width:1000px){.grid,.split,.bar{grid-template-columns:1fr}.form{grid-template-columns:1fr}}
 </style></head><body><header><h1>CPA Policy Hub</h1><div class="muted">Visual management for keys, quotas, usage and runtime state.</div></header><main>
@@ -3289,10 +3291,12 @@ async function loadUsage(){try{const d=await call('/usage');$('usageBox').innerH
 }
 
 func statusHTML() string {
-	return statusHTMLPage()
+	return finalStatusHTML()
 }
 
 func legacyStatusHTML() string {
+	return finalStatusHTML()
+
 	const page = `<!doctype html>
 <html lang="en">
 <head>
