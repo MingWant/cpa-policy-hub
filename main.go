@@ -316,10 +316,11 @@ type policyEvent struct {
 }
 
 type limiter struct {
-	mu             sync.Mutex
-	cfg            pluginConfig
-	configuredKeys map[string]keyRule
-	state          persistedState
+	mu              sync.Mutex
+	cfg             pluginConfig
+	configuredKeys  map[string]keyRule
+	state           persistedState
+	configLoadError string
 }
 
 type managementRequest struct {
@@ -444,12 +445,14 @@ func configure(raw []byte) error {
 	if strings.TrimSpace(cfg.StoragePath) == "" {
 		cfg.StoragePath = "cpa-policy-hub-state.json"
 	}
+	configLoadError := ""
 	if cfg.ManageConfigAPIKeys {
 		hostKeys, errLoadKeys := loadConfigAPIKeys(cfg.ConfigPath)
-		if errLoadKeys != nil && cfg.FailClosed {
-			return errLoadKeys
+		if errLoadKeys != nil {
+			configLoadError = errLoadKeys.Error()
+		} else {
+			cfg.Keys = append(configAPIKeyRules(hostKeys), cfg.Keys...)
 		}
-		cfg.Keys = append(configAPIKeyRules(hostKeys), cfg.Keys...)
 	}
 	configuredKeys := make(map[string]keyRule, len(cfg.Keys))
 	for _, rule := range cfg.Keys {
@@ -480,6 +483,7 @@ func configure(raw []byte) error {
 	}
 	currentLimiter.mu.Lock()
 	currentLimiter.cfg = cfg
+	currentLimiter.configLoadError = configLoadError
 	currentLimiter.configuredKeys = configuredKeys
 	currentLimiter.state = state
 	currentLimiter.mu.Unlock()
@@ -976,6 +980,7 @@ func managementStatus(req managementRequest) ([]byte, error) {
 		"storage_path":           currentLimiter.cfg.StoragePath,
 		"config_path":            currentLimiter.cfg.ConfigPath,
 		"manage_config_api_keys": currentLimiter.cfg.ManageConfigAPIKeys,
+		"config_load_error":      currentLimiter.configLoadError,
 		"policies":               len(currentLimiter.cfg.Policies),
 		"endpoint_rules":         len(currentLimiter.cfg.EndpointOverrides),
 		"configured_keys":        len(currentLimiter.configuredKeys),

@@ -10,9 +10,11 @@ plugins:
       storage_path: "cpa-policy-hub-state.json"
       # Import and manage top-level CPA/CPAMC api-keys from config.yaml.
       # Use an absolute path when CPA runs from another working directory/container path.
-      config_path: "config.yaml"
+      config_path: "/home/docker/CLIProxyAPI/config.yaml"
       manage_config_api_keys: true
-      fail_closed: true
+      # Keep registration alive even if config_path is temporarily wrong.
+      # Runtime policy checks still fail closed by default after the plugin is loaded.
+      fail_closed: false
       dry_run: false
       expose_limit_headers: false
       default_daily_token_limit: 100000
@@ -24,16 +26,7 @@ plugins:
       # Prefer key_hash in production. Hash format: sha256:<hex-encoded-sha256>
       auth:
         exclusive: true
-        keys:
-          - id: "dev"
-            name: "Development key"
-            key_hash: "sha256:REPLACE_WITH_SHA256_OF_KEY"
-            tenant: "team-a"
-            plan: "basic"
-            daily_token_limit: 100000
-            monthly_token_limit: 1000000
-            request_limit_per_minute: 60
-            allowed_models: ["*"]
+        keys: []
 
       pricing:
         - model: "gpt-5*"
@@ -47,7 +40,7 @@ plugins:
       policies:
         - name: "team-a-budget"
           match:
-            keys: ["dev"]
+            keys: ["config_api_key_*"]
             models: ["*"]
           quota:
             scope: "tenant"
@@ -60,7 +53,7 @@ plugins:
 
         - name: "force-responses-for-model"
           match:
-            keys: ["dev"]
+            keys: ["config_api_key_*"]
             providers: ["openai"]
             models: ["some-responses-only-model"]
             request_paths: ["/chat/completions"]
