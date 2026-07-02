@@ -49,6 +49,13 @@ Use `.so` on Linux, `.dylib` on macOS, or `.dll` on Windows. The plugin requires
 4. Start with the safe config below. Confirm `/status` reports `traffic_enabled: false`.
 5. Only then switch to advanced takeover mode if you want this plugin to authenticate/manage existing CPA `api-keys`.
 
+Server safety notes:
+
+- Keep `dry_run: true` while testing new policies. In dry-run mode request/response mutations and interface overrides are not applied to live traffic.
+- Do not use `allowed_providers` unless your model names include a provider prefix such as `openai/gpt-4.1` or the request path makes the provider unambiguous. If a provider allow-list is configured and the provider cannot be determined, the plugin rejects the request.
+- Policy request mutations intentionally cannot set or delete sensitive headers such as `Authorization`, `X-Api-Key`, `X-Goog-Api-Key`, `Cookie`, `Host`, or `Proxy-Authorization`.
+- The management page saves runtime key overrides to `storage_path`; it does not rewrite CPA `config.yaml`.
+
 ## Config
 
 ```yaml

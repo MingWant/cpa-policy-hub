@@ -23,8 +23,38 @@ plugins:
       # Add keys/policies only after verifying the management page works.
       auth:
         exclusive: false
-        keys: []
+        keys:
+          # - id: "team-a-dev"
+          #   key_hash: "sha256:..."
+          #   allowed_models: ["gpt-*", "claude-3-*"]
+          #   denied_models: ["gpt-5-pro"]
+          #   allowed_providers: ["openai", "claude"]
+          #   daily_token_limit: 100000
+          #   hourly_token_limit: 10000
+          #   hourly_request_limit: 300
+          #   request_limit_per_minute: 60
+          #   time_windows:
+          #     - timezone: "Asia/Shanghai"
+          #       days: ["weekday"]
+          #       start: "09:00"
+          #       end: "23:00"
+          #   request:
+          #     set_headers:
+          #       X-Team: "team-a"
+          #     set_model: "gpt-4.1-mini"
 
       pricing: []
-      policies: []
-      endpoint_overrides: []
+      policies:
+        # - name: "responses-only-model"
+        #   match:
+        #     providers: ["openai"]
+        #     models: ["my-responses-only-model"]
+        #     request_paths: ["/chat/completions"]
+        #   interface:
+        #     force_interface: "responses"
+        #   request:
+        #     set_model: "real-upstream-model"
+      endpoint_overrides:
+        # - name: "preserve-all-by-default"
+        #   models: ["*"]
+        #   preserve: true

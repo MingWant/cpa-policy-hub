@@ -33,8 +33,43 @@ plugins:
 
       auth:
         exclusive: true
-        keys: []
+        keys:
+          # Optional runtime/static managed keys in addition to top-level api-keys.
+          # Imported top-level CPA api-keys inherit the defaults above, then can be
+          # overridden from the Policy Hub management page/state file.
+          # - id: "team-a-dev"
+          #   key_hash: "sha256:..."
+          #   allowed_models: ["gpt-*", "claude-3-*"]
+          #   denied_models: ["gpt-5-pro"]
+          #   allowed_providers: ["openai", "claude"]
+          #   daily_token_limit: 100000
+          #   hourly_token_limit: 10000
+          #   hourly_request_limit: 300
+          #   request_limit_per_minute: 60
+          #   time_windows:
+          #     - timezone: "Asia/Shanghai"
+          #       days: ["weekday"]
+          #       start: "09:00"
+          #       end: "23:00"
+          #   request:
+          #     set_headers:
+          #       X-Team: "team-a"
+            #   error_response:
+            #     message: "Upstream returned an error. Try another model or contact support."
+            #     set_headers:
+            #       X-Policy-Hub-Error: "friendly"
 
       pricing: []
-      policies: []
+      policies:
+        # Rewrite a client-facing alias to a real upstream model and force the
+        # interface required by that upstream model.
+        # - name: "route-alias-to-responses"
+        #   match:
+        #     providers: ["openai"]
+        #     models: ["public-responses-alias"]
+        #     request_paths: ["/chat/completions"]
+        #   interface:
+        #     force_interface: "responses"
+        #   request:
+        #     set_model: "real-upstream-responses-model"
       endpoint_overrides: []

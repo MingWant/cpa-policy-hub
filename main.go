@@ -62,6 +62,8 @@ const (
 	pluginVersion                = "0.1.0"
 	interfaceOverrideHeader      = "X-CLIProxy-Force-Interface"
 	interfaceOverrideMatchHeader = "X-CLIProxy-Force-Interface-Match"
+	maxManagementBodyBytes       = 4 << 20
+	maxAuthModelBodyBytes        = 1 << 20
 )
 
 var currentLimiter = &limiter{
@@ -204,6 +206,43 @@ type requestPolicyAction struct {
 	Metadata        map[string]interface{} `yaml:"metadata" json:"metadata,omitempty"`
 }
 
+var protectedRequestHeaders = map[string]struct{}{
+	"authorization":     {},
+	"proxy-authorization": {},
+	"cookie":            {},
+	"set-cookie":        {},
+	"x-api-key":         {},
+	"x-goog-api-key":    {},
+	"x-cli-key":         {},
+	"host":              {},
+}
+
+var protectedResponseHeaders = map[string]struct{}{
+	"set-cookie": {},
+	"server":     {},
+}
+
+type timeWindowRule struct {
+	Name      string   `yaml:"name" json:"name,omitempty"`
+	Timezone  string   `yaml:"timezone" json:"timezone,omitempty"`
+	Days      []string `yaml:"days" json:"days,omitempty"`
+	Start     string   `yaml:"start" json:"start,omitempty"`
+	End       string   `yaml:"end" json:"end,omitempty"`
+	Deny      bool     `yaml:"deny" json:"deny,omitempty"`
+	Message   string   `yaml:"message" json:"message,omitempty"`
+}
+
+type errorResponseRule struct {
+	Name            string            `yaml:"name" json:"name,omitempty"`
+	StatusCode      int               `yaml:"status_code" json:"status_code,omitempty"`
+	Message         string            `yaml:"message" json:"message,omitempty"`
+	Body            string            `yaml:"body" json:"body,omitempty"`
+	JSON            map[string]any    `yaml:"json" json:"json,omitempty"`
+	SetHeaders      map[string]string `yaml:"set_headers" json:"set_headers,omitempty"`
+	HideUpstream    bool              `yaml:"hide_upstream" json:"hide_upstream,omitempty"`
+	UpstreamStatuses []int            `yaml:"upstream_statuses" json:"upstream_statuses,omitempty"`
+}
+
 type responsePolicyAction struct {
 	SetHeaders    map[string]string      `yaml:"set_headers" json:"set_headers,omitempty"`
 	DeleteHeaders []string               `yaml:"delete_headers" json:"delete_headers,omitempty"`
@@ -255,9 +294,18 @@ type keyRule struct {
 	DailyTokenLimit       int64                  `yaml:"daily_token_limit" json:"daily_token_limit"`
 	MonthlyTokenLimit     int64                  `yaml:"monthly_token_limit" json:"monthly_token_limit"`
 	TotalTokenLimit       int64                  `yaml:"total_token_limit" json:"total_token_limit"`
+	HourlyTokenLimit      int64                  `yaml:"hourly_token_limit" json:"hourly_token_limit"`
+	HourlyRequestLimit    int64                  `yaml:"hourly_request_limit" json:"hourly_request_limit"`
 	RequestLimitPerMinute int                    `yaml:"request_limit_per_minute" json:"request_limit_per_minute"`
 	AllowedModels         []string               `yaml:"allowed_models" json:"allowed_models,omitempty"`
+	DeniedModels          []string               `yaml:"denied_models" json:"denied_models,omitempty"`
+	AllowedProviders      []string               `yaml:"allowed_providers" json:"allowed_providers,omitempty"`
+	DeniedProviders       []string               `yaml:"denied_providers" json:"denied_providers,omitempty"`
+	TimeWindows           []timeWindowRule       `yaml:"time_windows" json:"time_windows,omitempty"`
 	EndpointOverrides     []endpointOverrideRule `yaml:"endpoint_overrides" json:"endpoint_overrides,omitempty"`
+	Request               requestPolicyAction    `yaml:"request" json:"request,omitempty"`
+	Response              responsePolicyAction   `yaml:"response" json:"response,omitempty"`
+	ErrorResponse         errorResponseRule      `yaml:"error_response" json:"error_response,omitempty"`
 	Metadata              map[string]string      `yaml:"metadata" json:"metadata,omitempty"`
 	Source                string                 `yaml:"-" json:"source,omitempty"`
 }
@@ -284,11 +332,29 @@ type usageCounter struct {
 	MaxActive        int                `json:"max_active,omitempty"`
 	DailyCost        map[string]float64 `json:"daily_cost,omitempty"`
 	MonthlyCost      map[string]float64 `json:"monthly_cost,omitempty"`
+	HourlyTokens     map[string]int64   `json:"hourly_tokens,omitempty"`
+	HourlyRequests   map[string]int64   `json:"hourly_requests,omitempty"`
 	DailyTokens      map[string]int64   `json:"daily_tokens"`
 	MonthlyTokens    map[string]int64   `json:"monthly_tokens"`
 	RequestsByMinute map[string]int     `json:"requests_by_minute"`
 	Models           map[string]int64   `json:"models"`
 	LastUsedAt       time.Time          `json:"last_used_at,omitempty"`
+}
+
+func (u *usageCounter) clone() *usageCounter {
+	if u == nil {
+		return nil
+	}
+	cloned := *u
+	cloned.DailyCost = cloneFloatMap(u.DailyCost)
+	cloned.MonthlyCost = cloneFloatMap(u.MonthlyCost)
+	cloned.HourlyTokens = cloneInt64Map(u.HourlyTokens)
+	cloned.HourlyRequests = cloneInt64Map(u.HourlyRequests)
+	cloned.DailyTokens = cloneInt64Map(u.DailyTokens)
+	cloned.MonthlyTokens = cloneInt64Map(u.MonthlyTokens)
+	cloned.RequestsByMinute = cloneIntMap(u.RequestsByMinute)
+	cloned.Models = cloneInt64Map(u.Models)
+	return &cloned
 }
 
 type usageEvent struct {
@@ -643,8 +709,8 @@ func (l *limiter) runtimeCapabilitiesLocked() capabilities {
 		return capabilities{ManagementAPI: true}
 	}
 	hasAuthKeys := len(l.configuredKeys) > 0 || len(l.state.Keys) > 0
-	hasRequestPolicies := len(l.cfg.Policies) > 0 || len(l.cfg.EndpointOverrides) > 0
-	hasResponsePolicies := len(l.cfg.Policies) > 0 || l.cfg.ExposeLimitHeaders
+	hasRequestPolicies := len(l.cfg.Policies) > 0 || len(l.cfg.EndpointOverrides) > 0 || anyKeyRequestPolicyLocked(l.configuredKeys) || anyKeyRequestPolicyLocked(l.state.Keys)
+	hasResponsePolicies := len(l.cfg.Policies) > 0 || l.cfg.ExposeLimitHeaders || anyKeyResponsePolicyLocked(l.configuredKeys) || anyKeyResponsePolicyLocked(l.state.Keys)
 	hasUsage := hasAuthKeys || len(l.cfg.Policies) > 0 || len(l.cfg.Pricing) > 0
 	return capabilities{
 		FrontendAuthProvider:          hasAuthKeys,
@@ -654,6 +720,24 @@ func (l *limiter) runtimeCapabilitiesLocked() capabilities {
 		UsagePlugin:                   hasUsage,
 		ManagementAPI:                 true,
 	}
+}
+
+func anyKeyRequestPolicyLocked(keys map[string]keyRule) bool {
+	for _, rule := range keys {
+		if len(rule.EndpointOverrides) > 0 || requestPolicyConfigured(rule.Request) {
+			return true
+		}
+	}
+	return false
+}
+
+func anyKeyResponsePolicyLocked(keys map[string]keyRule) bool {
+	for _, rule := range keys {
+		if responsePolicyConfigured(rule.Response) || errorResponseConfigured(rule.ErrorResponse) {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *limiter) trafficConfigEnabled() bool {
@@ -675,10 +759,11 @@ func authenticate(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
 	model := requestedModel(req.Body)
+	provider := providerFromRequest(req)
 	now := time.Now().UTC()
 	currentLimiter.mu.Lock()
 	rule, ok := currentLimiter.findKeyByCredentialLocked(credential)
-	if !ok || !rule.usable(now) || !modelAllowed(model, rule.AllowedModels) {
+	if !ok || !rule.usable(now) || !keyPolicyAllowed(rule, model, provider, now) {
 		currentLimiter.mu.Unlock()
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
@@ -688,7 +773,7 @@ func authenticate(raw []byte) ([]byte, error) {
 		currentLimiter.mu.Unlock()
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
-	ctx := endpointOverrideContext{KeyID: rule.ID, Model: model, RequestedModel: model, RequestPath: normalizeEndpointPath(req.Path)}
+	ctx := endpointOverrideContext{KeyID: rule.ID, Provider: provider, Model: model, RequestedModel: model, RequestPath: normalizeEndpointPath(req.Path)}
 	denied, deniedPolicy, deniedMessage, dryRun := currentLimiter.authDenyDecisionLocked(ctx)
 	if denied && !dryRun {
 		currentLimiter.appendPolicyEventLocked(policyEvent{At: time.Now().UTC(), Policy: deniedPolicy, Action: "deny", KeyID: rule.ID, Model: model, RequestPath: ctx.RequestPath, Message: deniedMessage})
@@ -731,6 +816,9 @@ func authenticate(raw []byte) ([]byte, error) {
 		"key_id":          rule.ID,
 	}
 	for key, value := range rule.Metadata {
+		if reservedAuthMetadataKey(key) {
+			continue
+		}
 		metadata[key] = value
 	}
 	if rule.Tenant != "" {
@@ -740,6 +828,15 @@ func authenticate(raw []byte) ([]byte, error) {
 		metadata["plan"] = rule.Plan
 	}
 	return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: true, Principal: rule.ID, Metadata: metadata})
+}
+
+func reservedAuthMetadataKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "provider", "legacy_provider", "source", "key_id", "tenant", "plan":
+		return true
+	default:
+		return false
+	}
 }
 
 func interceptRequest(raw []byte) ([]byte, error) {
@@ -756,6 +853,15 @@ func interceptRequest(raw []byte) ([]byte, error) {
 	body := append([]byte(nil), req.Body...)
 	dryRun := currentLimiter.dryRun()
 	ctx := requestPolicyContext(req)
+	if rule, ok := currentLimiter.keyRuleByID(ctx.KeyID); ok {
+		changed, errApply := applyRequestPolicy(rule.Request, headers, &clearHeaders, &body)
+		if errApply != nil {
+			return nil, errApply
+		}
+		if changed && rule.ID != "" && !dryRun {
+			headers.Add("X-CLIProxy-Policy-Hub-Match", "key:"+rule.ID)
+		}
+	}
 	for _, policy := range currentLimiter.matchingPolicies(ctx) {
 		if policy.Deny {
 			currentLimiter.recordPolicyEvent(policyEvent{At: time.Now().UTC(), Policy: policy.Name, Action: dryRunAction("would_deny", "deny", dryRun), KeyID: ctx.KeyID, Provider: ctx.Provider, Model: ctx.Model, RequestPath: ctx.RequestPath, DryRun: dryRun, Message: policy.denyMessage()})
@@ -777,7 +883,7 @@ func interceptRequest(raw []byte) ([]byte, error) {
 		headers = http.Header{}
 		headers.Set("X-CLIProxy-Policy-Hub-Dry-Run", "true")
 	}
-	if req.ToFormat != "" {
+	if !dryRun && req.ToFormat != "" {
 		if target, matched := currentLimiter.endpointOverride(req); matched != "" {
 			if target != "" {
 				headers.Set(interfaceOverrideHeader, target)
@@ -790,6 +896,15 @@ func interceptRequest(raw []byte) ([]byte, error) {
 		response.Body = body
 	}
 	return okEnvelope(response)
+}
+
+func (l *limiter) keyRuleByID(keyID string) (keyRule, bool) {
+	if l == nil || strings.TrimSpace(keyID) == "" {
+		return keyRule{}, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.keyRuleByIDLocked(keyID)
 }
 
 func interceptResponse(raw []byte) ([]byte, error) {
@@ -805,6 +920,18 @@ func interceptResponse(raw []byte) ([]byte, error) {
 	body := append([]byte(nil), req.Body...)
 	dryRun := currentLimiter.dryRun()
 	ctx := responsePolicyContext(req)
+	if rule, ok := currentLimiter.keyRuleByID(ctx.KeyID); ok {
+		if applyCustomErrorResponse(rule.ErrorResponse, &headers, &clearHeaders, &body) && rule.ID != "" && !dryRun {
+			headers.Add("X-CLIProxy-Policy-Hub-Match", "key-error:"+rule.ID)
+		}
+		changed, errApply := applyResponsePolicy(rule.Response, headers, &clearHeaders, &body)
+		if errApply != nil {
+			return nil, errApply
+		}
+		if changed && rule.ID != "" && !dryRun {
+			headers.Add("X-CLIProxy-Policy-Hub-Match", "key:"+rule.ID)
+		}
+	}
 	for _, policy := range currentLimiter.matchingPolicies(ctx) {
 		changed, errApply := applyResponsePolicy(policy.Response, headers, &clearHeaders, &body)
 		if errApply != nil {
@@ -887,6 +1014,7 @@ func handleUsage(raw []byte) ([]byte, error) {
 	}
 	usage.DailyTokens[dayKey(now)] += tokens
 	usage.MonthlyTokens[monthKey(now)] += tokens
+	usage.HourlyTokens[hourKey(now)] += tokens
 	if record.Model != "" {
 		usage.Models[record.Model] += tokens
 	}
@@ -950,6 +1078,9 @@ func registerManagement() ([]byte, error) {
 }
 
 func handleManagement(raw []byte) ([]byte, error) {
+	if len(raw) > maxManagementBodyBytes {
+		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusRequestEntityTooLarge, Body: []byte(`{"error":"management request too large"}`), Headers: jsonHeaders()})
+	}
 	var req managementRequest
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
@@ -1001,13 +1132,14 @@ func managementStatus(req managementRequest) ([]byte, error) {
 	}
 	currentLimiter.mu.Lock()
 	defer currentLimiter.mu.Unlock()
+	trafficEnabled := currentLimiter.trafficEnabledLocked()
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
 		"plugin":                 pluginID,
 		"name":                   pluginDisplayName,
 		"legacy_plugin":          legacyPluginID,
 		"version":                pluginVersion,
 		"capabilities":           currentLimiter.runtimeCapabilitiesLocked(),
-		"traffic_enabled":        currentLimiter.trafficEnabledLocked(),
+		"traffic_enabled":        trafficEnabled,
 		"traffic_config_enabled": currentLimiter.cfg.TrafficEnabled,
 		"exclusive":              currentLimiter.cfg.Exclusive,
 		"storage_path":           currentLimiter.cfg.StoragePath,
@@ -1100,6 +1232,10 @@ func managementPatchKey(raw []byte) ([]byte, error) {
 		currentLimiter.mu.Unlock()
 		return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": "key_hash is required"}))
 	}
+	if normalized.ID != rule.ID {
+		currentLimiter.mu.Unlock()
+		return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": "id cannot be changed by patch"}))
+	}
 	currentLimiter.state.Keys[normalized.ID] = normalized
 	errSave := currentLimiter.saveStateLocked()
 	currentLimiter.mu.Unlock()
@@ -1144,9 +1280,9 @@ func managementUsage(req managementRequest) ([]byte, error) {
 	currentLimiter.mu.Lock()
 	defer currentLimiter.mu.Unlock()
 	if id != "" {
-		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"id": id, "usage": currentLimiter.state.Usage[id]}))
+		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"id": id, "usage": currentLimiter.state.Usage[id].clone()}))
 	}
-	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"usage": currentLimiter.state.Usage, "policy_usage": currentLimiter.state.Policies, "active": currentLimiter.state.Active}))
+	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"usage": cloneUsageMap(currentLimiter.state.Usage), "policy_usage": cloneUsageMap(currentLimiter.state.Policies), "active": cloneIntMap(currentLimiter.state.Active)}))
 }
 
 func managementEvents(req managementRequest) ([]byte, error) {
@@ -1335,6 +1471,50 @@ func mergeState(dst *persistedState, src persistedState) {
 	}
 }
 
+func cloneUsageMap(values map[string]*usageCounter) map[string]*usageCounter {
+	if values == nil {
+		return map[string]*usageCounter{}
+	}
+	out := make(map[string]*usageCounter, len(values))
+	for key, value := range values {
+		out[key] = value.clone()
+	}
+	return out
+}
+
+func cloneInt64Map(values map[string]int64) map[string]int64 {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]int64, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneIntMap(values map[string]int) map[string]int {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]int, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneFloatMap(values map[string]float64) map[string]float64 {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]float64, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
 func (l *limiter) findKeyByCredentialLocked(credential string) (keyRule, bool) {
 	hash := hashAPIKey(credential)
 	for _, rule := range l.state.Keys {
@@ -1402,6 +1582,12 @@ func (l *limiter) ensureUsageLocked(keyID string) *usageCounter {
 	if usage.Models == nil {
 		usage.Models = map[string]int64{}
 	}
+	if usage.HourlyTokens == nil {
+		usage.HourlyTokens = map[string]int64{}
+	}
+	if usage.HourlyRequests == nil {
+		usage.HourlyRequests = map[string]int64{}
+	}
 	return usage
 }
 
@@ -1440,11 +1626,24 @@ func ensureUsageMaps(usage *usageCounter) {
 	if usage.MonthlyCost == nil {
 		usage.MonthlyCost = map[string]float64{}
 	}
+	if usage.HourlyTokens == nil {
+		usage.HourlyTokens = map[string]int64{}
+	}
+	if usage.HourlyRequests == nil {
+		usage.HourlyRequests = map[string]int64{}
+	}
 }
 
 func (l *limiter) allowRequestLocked(rule keyRule, usage *usageCounter, now time.Time) bool {
+	ensureUsageMaps(usage)
+	if rule.HourlyRequestLimit > 0 && usage.HourlyRequests[hourKey(now)] >= rule.HourlyRequestLimit {
+		return false
+	}
 	limit := rule.RequestLimitPerMinute
 	if limit <= 0 {
+		if rule.HourlyRequestLimit > 0 {
+			usage.HourlyRequests[hourKey(now)]++
+		}
 		return true
 	}
 	minute := minuteKey(now)
@@ -1453,6 +1652,9 @@ func (l *limiter) allowRequestLocked(rule keyRule, usage *usageCounter, now time
 		return false
 	}
 	usage.RequestsByMinute[minute]++
+	if rule.HourlyRequestLimit > 0 {
+		usage.HourlyRequests[hourKey(now)]++
+	}
 	return true
 }
 
@@ -1805,6 +2007,137 @@ func (l *limiter) endpointOverride(req pluginapi.RequestInterceptRequest) (strin
 	return "", ""
 }
 
+func providerFromRequest(req pluginapi.FrontendAuthRequest) string {
+	if provider := providerFromModel(requestedModel(req.Body)); provider != "" {
+		return provider
+	}
+	path := normalizeEndpointPath(req.Path)
+	switch {
+	case strings.Contains(path, "/messages"):
+		return "claude"
+	case strings.Contains(path, "/responses") || strings.Contains(path, "/chat/completions"):
+		return "openai"
+	default:
+		return ""
+	}
+}
+
+func providerFromModel(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	for _, sep := range []string{"/", ":"} {
+		if idx := strings.Index(model, sep); idx > 0 {
+			provider := strings.TrimSpace(model[:idx])
+			if provider != "" && provider != "models" {
+				return provider
+			}
+		}
+	}
+	return ""
+}
+
+func keyPolicyAllowed(rule keyRule, model string, provider string, now time.Time) bool {
+	if !modelAllowed(model, rule.AllowedModels) {
+		return false
+	}
+	if strings.TrimSpace(model) != "" && stringListMatches(rule.DeniedModels, model) {
+		return false
+	}
+	if len(rule.AllowedProviders) > 0 && (provider == "" || !stringListMatches(rule.AllowedProviders, provider)) {
+		return false
+	}
+	if provider != "" && len(rule.DeniedProviders) > 0 && stringListMatches(rule.DeniedProviders, provider) {
+		return false
+	}
+	return timeWindowsAllow(rule.TimeWindows, now)
+}
+
+func timeWindowsAllow(windows []timeWindowRule, now time.Time) bool {
+	if len(windows) == 0 {
+		return true
+	}
+	allowWindows := 0
+	allowed := false
+	for _, window := range windows {
+		matched := timeWindowMatches(window, now)
+		if window.Deny {
+			if matched {
+				return false
+			}
+			continue
+		}
+		allowWindows++
+		allowed = allowed || matched
+	}
+	return allowWindows == 0 || allowed
+}
+
+func timeWindowMatches(window timeWindowRule, now time.Time) bool {
+	loc := time.UTC
+	if tz := strings.TrimSpace(window.Timezone); tz != "" {
+		if loaded, errLoad := time.LoadLocation(tz); errLoad == nil {
+			loc = loaded
+		}
+	}
+	local := now.In(loc)
+	if len(window.Days) > 0 && !dayMatches(window.Days, local.Weekday()) {
+		return false
+	}
+	start, okStart := parseClock(window.Start)
+	end, okEnd := parseClock(window.End)
+	if !okStart && !okEnd {
+		return true
+	}
+	minute := local.Hour()*60 + local.Minute()
+	if !okStart {
+		return minute <= end
+	}
+	if !okEnd {
+		return minute >= start
+	}
+	if start <= end {
+		return minute >= start && minute <= end
+	}
+	return minute >= start || minute <= end
+}
+
+func dayMatches(patterns []string, day time.Weekday) bool {
+	name := strings.ToLower(day.String())
+	short := name
+	if len(short) > 3 {
+		short = short[:3]
+	}
+	for _, pattern := range patterns {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		if pattern == "*" || pattern == name || pattern == short {
+			return true
+		}
+		if day >= time.Monday && day <= time.Friday && (pattern == "weekday" || pattern == "weekdays") {
+			return true
+		}
+		if (day == time.Saturday || day == time.Sunday) && (pattern == "weekend" || pattern == "weekends") {
+			return true
+		}
+	}
+	return false
+}
+
+func parseClock(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) < 2 {
+		return 0, false
+	}
+	hour, errHour := strconv.Atoi(parts[0])
+	minute, errMinute := strconv.Atoi(parts[1])
+	if errHour != nil || errMinute != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, false
+	}
+	return hour*60 + minute, true
+}
+
 func (l *limiter) matchingPolicies(ctx endpointOverrideContext) []policyRule {
 	if l == nil {
 		return nil
@@ -1904,7 +2237,7 @@ func (p policyRule) matches(ctx endpointOverrideContext) bool {
 }
 
 func applyRequestPolicy(action requestPolicyAction, headers http.Header, clearHeaders *[]string, body *[]byte) (bool, error) {
-	changed := applyHeaderPolicy(action.SetHeaders, action.DeleteHeaders, headers, clearHeaders)
+	changed := applyHeaderPolicy(action.SetHeaders, action.DeleteHeaders, headers, clearHeaders, protectedRequestHeaders)
 	if strings.TrimSpace(action.SetModel) != "" {
 		if errSet := setJSONPath(body, "model", strings.TrimSpace(action.SetModel)); errSet != nil {
 			return changed, errSet
@@ -1942,17 +2275,97 @@ func applyRequestPolicy(action requestPolicyAction, headers http.Header, clearHe
 	return changed || updated, errJSON
 }
 
+func requestPolicyConfigured(action requestPolicyAction) bool {
+	return len(action.SetHeaders) > 0 || len(action.DeleteHeaders) > 0 || len(action.SetJSON) > 0 || len(action.DeleteJSON) > 0 || strings.TrimSpace(action.SetModel) != "" || strings.TrimSpace(action.SetServiceTier) != "" || action.MaxTokens != nil || action.Temperature != nil || len(action.ReasoningEffort.Deny) > 0 || strings.TrimSpace(action.ReasoningEffort.Replace) != ""
+}
+
 func applyResponsePolicy(action responsePolicyAction, headers http.Header, clearHeaders *[]string, body *[]byte) (bool, error) {
-	changed := applyHeaderPolicy(action.SetHeaders, action.DeleteHeaders, headers, clearHeaders)
+	changed := applyHeaderPolicy(action.SetHeaders, action.DeleteHeaders, headers, clearHeaders, protectedResponseHeaders)
 	updated, errJSON := applyJSONPolicy(action.SetJSON, action.DeleteJSON, body)
 	return changed || updated, errJSON
 }
 
-func applyHeaderPolicy(setHeaders map[string]string, deleteHeaders []string, headers http.Header, clearHeaders *[]string) bool {
+func responsePolicyConfigured(action responsePolicyAction) bool {
+	return len(action.SetHeaders) > 0 || len(action.DeleteHeaders) > 0 || len(action.SetJSON) > 0 || len(action.DeleteJSON) > 0
+}
+
+func errorResponseConfigured(rule errorResponseRule) bool {
+	return rule.StatusCode > 0 || strings.TrimSpace(rule.Message) != "" || strings.TrimSpace(rule.Body) != "" || len(rule.JSON) > 0 || len(rule.SetHeaders) > 0 || rule.HideUpstream
+}
+
+func applyCustomErrorResponse(rule errorResponseRule, headers *http.Header, clearHeaders *[]string, body *[]byte) bool {
+	if !errorResponseConfigured(rule) || !upstreamBodyLooksLikeError(*body) {
+		return false
+	}
+	if headers == nil {
+		return false
+	}
+	for name, value := range rule.SetHeaders {
+		name = strings.TrimSpace(name)
+		if name == "" || protectedHeader(name, protectedResponseHeaders) {
+			continue
+		}
+		headers.Set(name, value)
+	}
+	if len(rule.JSON) > 0 {
+		payload := cloneAnyMap(rule.JSON)
+		if _, exists := payload["error"]; !exists && strings.TrimSpace(rule.Message) != "" {
+			payload["error"] = map[string]any{"message": strings.TrimSpace(rule.Message), "type": "policy_hub_error"}
+		}
+		if raw, errMarshal := json.Marshal(payload); errMarshal == nil {
+			*body = raw
+			headers.Set("Content-Type", "application/json; charset=utf-8")
+			return true
+		}
+	}
+	message := strings.TrimSpace(rule.Body)
+	if message == "" {
+		message = strings.TrimSpace(rule.Message)
+	}
+	if message == "" {
+		message = "The upstream provider returned an error. Try a different model or contact the API administrator."
+	}
+	*body = []byte(`{"error":{"message":` + strconv.Quote(message) + `,"type":"policy_hub_error"}}`)
+	headers.Set("Content-Type", "application/json; charset=utf-8")
+	return true
+}
+
+func upstreamBodyLooksLikeError(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || len(trimmed) > maxAuthModelBodyBytes {
+		return false
+	}
+	var payload map[string]any
+	if json.Unmarshal(trimmed, &payload) != nil {
+		text := strings.ToLower(string(trimmed))
+		return strings.Contains(text, "error") || strings.Contains(text, "exception") || strings.Contains(text, "rate limit")
+	}
+	if _, ok := payload["error"]; ok {
+		return true
+	}
+	if _, ok := payload["errors"]; ok {
+		return true
+	}
+	status := strings.ToLower(stringFromAny(payload["status"]))
+	return status == "error" || status == "failed"
+}
+
+func cloneAnyMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func applyHeaderPolicy(setHeaders map[string]string, deleteHeaders []string, headers http.Header, clearHeaders *[]string, protected map[string]struct{}) bool {
 	changed := false
 	for name, value := range setHeaders {
 		name = strings.TrimSpace(name)
-		if name == "" {
+		if name == "" || protectedHeader(name, protected) {
 			continue
 		}
 		headers.Set(name, value)
@@ -1960,13 +2373,21 @@ func applyHeaderPolicy(setHeaders map[string]string, deleteHeaders []string, hea
 	}
 	for _, name := range deleteHeaders {
 		name = strings.TrimSpace(name)
-		if name == "" {
+		if name == "" || protectedHeader(name, protected) {
 			continue
 		}
 		*clearHeaders = append(*clearHeaders, name)
 		changed = true
 	}
 	return changed
+}
+
+func protectedHeader(name string, protected map[string]struct{}) bool {
+	if len(protected) == 0 {
+		return false
+	}
+	_, ok := protected[strings.ToLower(strings.TrimSpace(name))]
+	return ok
 }
 
 func applyJSONPolicy(setValues map[string]any, deletePaths []string, body *[]byte) (bool, error) {
@@ -2447,6 +2868,17 @@ func normalizeKeyRule(rule keyRule, cfg pluginConfig, source string) (keyRule, b
 	if !validSHA256Hash(rule.KeyHash) {
 		return keyRule{}, false
 	}
+	if rule.Metadata != nil {
+		for key := range rule.Metadata {
+			if reservedAuthMetadataKey(key) {
+				delete(rule.Metadata, key)
+			}
+		}
+	}
+	rule.AllowedModels = uniqueNonEmptyStrings(rule.AllowedModels)
+	rule.DeniedModels = uniqueNonEmptyStrings(rule.DeniedModels)
+	rule.AllowedProviders = uniqueNonEmptyStrings(rule.AllowedProviders)
+	rule.DeniedProviders = uniqueNonEmptyStrings(rule.DeniedProviders)
 	if rule.ID == "" && rule.KeyHash != "" {
 		rule.ID = "key_" + strings.TrimPrefix(rule.KeyHash, "sha256:")[:12]
 	}
@@ -2467,6 +2899,24 @@ func normalizeKeyRule(rule keyRule, cfg pluginConfig, source string) (keyRule, b
 	}
 	if len(rule.AllowedModels) == 0 && len(cfg.DefaultAllowedModels) > 0 {
 		rule.AllowedModels = append([]string(nil), cfg.DefaultAllowedModels...)
+	}
+	for idx := range rule.TimeWindows {
+		rule.TimeWindows[idx].Name = strings.TrimSpace(rule.TimeWindows[idx].Name)
+		rule.TimeWindows[idx].Timezone = strings.TrimSpace(rule.TimeWindows[idx].Timezone)
+		rule.TimeWindows[idx].Start = strings.TrimSpace(rule.TimeWindows[idx].Start)
+		rule.TimeWindows[idx].End = strings.TrimSpace(rule.TimeWindows[idx].End)
+		rule.TimeWindows[idx].Days = uniqueNonEmptyStrings(rule.TimeWindows[idx].Days)
+	}
+	rule.ErrorResponse.Name = strings.TrimSpace(rule.ErrorResponse.Name)
+	rule.ErrorResponse.Message = strings.TrimSpace(rule.ErrorResponse.Message)
+	rule.ErrorResponse.Body = strings.TrimSpace(rule.ErrorResponse.Body)
+	if rule.ErrorResponse.StatusCode < 0 || rule.ErrorResponse.StatusCode > 599 {
+		rule.ErrorResponse.StatusCode = 0
+	}
+	for idx, status := range rule.ErrorResponse.UpstreamStatuses {
+		if status < 100 || status > 599 {
+			rule.ErrorResponse.UpstreamStatuses[idx] = 0
+		}
 	}
 	rule.Key = ""
 	return rule, true
@@ -2491,6 +2941,9 @@ func withinQuota(rule keyRule, usage *usageCounter, now time.Time) bool {
 		return true
 	}
 	if rule.TotalTokenLimit > 0 && usage.TotalTokens >= rule.TotalTokenLimit {
+		return false
+	}
+	if rule.HourlyTokenLimit > 0 && usage.HourlyTokens[hourKey(now)] >= rule.HourlyTokenLimit {
 		return false
 	}
 	if rule.DailyTokenLimit > 0 && usage.DailyTokens[dayKey(now)] >= rule.DailyTokenLimit {
@@ -2526,6 +2979,9 @@ func modelAllowed(model string, allowed []string) bool {
 }
 
 func requestedModel(body []byte) string {
+	if len(body) > maxAuthModelBodyBytes {
+		return ""
+	}
 	var payload map[string]any
 	if len(body) == 0 || json.Unmarshal(body, &payload) != nil {
 		return ""
@@ -2695,6 +3151,10 @@ func dayKey(t time.Time) string {
 	return t.UTC().Format("2006-01-02")
 }
 
+func hourKey(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15Z")
+}
+
 func monthKey(t time.Time) string {
 	return t.UTC().Format("2006-01")
 }
@@ -2762,6 +3222,10 @@ async function loadUsage(){try{const d=await call('/usage');$('usageBox').innerH
 }
 
 func statusHTML() string {
+	return statusHTMLPage()
+}
+
+func legacyStatusHTML() string {
 	const page = `<!doctype html>
 <html lang="en">
 <head>
