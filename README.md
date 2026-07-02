@@ -39,9 +39,17 @@ plugins:
       enabled: true
       priority: 1
       storage_path: "cpa-policy-hub-state.json"
+      # Directly import and manage CPA/CPAMC top-level api-keys from config.yaml.
+      # Use an absolute path if CPA's working directory is not the config directory.
+      config_path: "config.yaml"
+      manage_config_api_keys: true
       fail_closed: true
       dry_run: false
       expose_limit_headers: false
+      default_daily_token_limit: 100000
+      default_monthly_token_limit: 1000000
+      default_request_limit_per_minute: 60
+      default_allowed_models: ["*"]
 
       pricing:
         - model: "gpt-5*"
@@ -54,6 +62,7 @@ plugins:
 
       auth:
         exclusive: true
+        # Optional additional plugin-managed keys. Top-level CPA api-keys are imported automatically when manage_config_api_keys is true.
         keys:
           - id: "dev"
             name: "Development key"
@@ -138,6 +147,36 @@ plugins:
 ```
 
 For new installs, prefer `cpa-policy-hub` and the `auth` / `policies` blocks.
+
+### Manage CPAMC `api-keys` directly
+
+Set `manage_config_api_keys: true` to let the plugin read the top-level CPA/CPAMC `api-keys` from `config.yaml`, hash them internally, and apply the plugin default limits/policies to them. Keep `auth.exclusive: true` so the plugin becomes the frontend authenticator for the same client keys.
+
+```yaml
+api-keys:
+  - "sk-client-a"
+  - "sk-client-b"
+
+plugins:
+  enabled: true
+  dir: "plugins"
+  configs:
+    cpa-policy-hub:
+      enabled: true
+      priority: 1
+      storage_path: "cpa-policy-hub-state.json"
+      config_path: "config.yaml"
+      manage_config_api_keys: true
+      fail_closed: true
+      default_daily_token_limit: 100000
+      default_monthly_token_limit: 1000000
+      default_request_limit_per_minute: 60
+      default_allowed_models: ["*"]
+      auth:
+        exclusive: true
+```
+
+If the CPA process cannot find `config.yaml`, set `config_path` to the path visible inside the running CPA process/container, for example `/home/docker/CLIProxyAPI/config.yaml` on a host install.
 
 ## Policy blocks
 

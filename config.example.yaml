@@ -8,10 +8,19 @@ plugins:
       enabled: true
       priority: 1
       storage_path: "cpa-policy-hub-state.json"
+      # Import and manage top-level CPA/CPAMC api-keys from config.yaml.
+      # Use an absolute path when CPA runs from another working directory/container path.
+      config_path: "config.yaml"
+      manage_config_api_keys: true
       fail_closed: true
       dry_run: false
       expose_limit_headers: false
+      default_daily_token_limit: 100000
+      default_monthly_token_limit: 1000000
+      default_request_limit_per_minute: 60
+      default_allowed_models: ["*"]
 
+      # Optional extra plugin-managed keys. CPA/CPAMC top-level api-keys are imported automatically above.
       # Prefer key_hash in production. Hash format: sha256:<hex-encoded-sha256>
       auth:
         exclusive: true

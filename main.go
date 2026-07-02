@@ -116,6 +116,8 @@ type pluginConfig struct {
 	Priority                     int                    `yaml:"priority" json:"priority"`
 	Exclusive                    bool                   `yaml:"exclusive" json:"exclusive"`
 	StoragePath                  string                 `yaml:"storage_path" json:"storage_path"`
+	ConfigPath                   string                 `yaml:"config_path" json:"config_path"`
+	ManageConfigAPIKeys          bool                   `yaml:"manage_config_api_keys" json:"manage_config_api_keys"`
 	FailClosed                   bool                   `yaml:"fail_closed" json:"fail_closed"`
 	DryRun                       bool                   `yaml:"dry_run" json:"dry_run"`
 	ExposeLimitHeaders           bool                   `yaml:"expose_limit_headers" json:"expose_limit_headers"`
@@ -129,6 +131,11 @@ type pluginConfig struct {
 	Policies                     []policyRule           `yaml:"policies" json:"policies"`
 	EndpointOverrides            []endpointOverrideRule `yaml:"endpoint_overrides" json:"endpoint_overrides"`
 	Keys                         []keyRule              `yaml:"keys" json:"keys"`
+}
+
+type hostConfigAPIKeys struct {
+	APIKeys      []string `yaml:"api-keys"`
+	APIKeysAlias []string `yaml:"api_keys"`
 }
 
 type authConfig struct {
@@ -435,6 +442,13 @@ func configure(raw []byte) error {
 	if strings.TrimSpace(cfg.StoragePath) == "" {
 		cfg.StoragePath = "cpa-policy-hub-state.json"
 	}
+	if cfg.ManageConfigAPIKeys {
+		hostKeys, errLoadKeys := loadConfigAPIKeys(cfg.ConfigPath)
+		if errLoadKeys != nil && cfg.FailClosed {
+			return errLoadKeys
+		}
+		cfg.Keys = append(configAPIKeyRules(hostKeys), cfg.Keys...)
+	}
 	configuredKeys := make(map[string]keyRule, len(cfg.Keys))
 	for _, rule := range cfg.Keys {
 		normalized, ok := normalizeKeyRule(rule, cfg, "config")
@@ -487,6 +501,55 @@ func normalizePolicyConfigAliases(cfg *pluginConfig) {
 	}
 }
 
+func loadConfigAPIKeys(configPath string) ([]string, error) {
+	path := strings.TrimSpace(configPath)
+	if path == "" {
+		path = "config.yaml"
+	}
+	raw, errRead := os.ReadFile(path)
+	if errRead != nil {
+		return nil, errRead
+	}
+	var cfg hostConfigAPIKeys
+	if errUnmarshal := yaml.Unmarshal(raw, &cfg); errUnmarshal != nil {
+		return nil, errUnmarshal
+	}
+	keys := append([]string(nil), cfg.APIKeys...)
+	keys = append(keys, cfg.APIKeysAlias...)
+	return uniqueNonEmptyStrings(keys), nil
+}
+
+func configAPIKeyRules(keys []string) []keyRule {
+	rules := make([]keyRule, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		hash := hashAPIKey(key)
+		id := "config_api_key_" + strings.TrimPrefix(hash, "sha256:")[:12]
+		rules = append(rules, keyRule{ID: id, Name: "CPA config api-key", KeyHash: hash})
+	}
+	return rules
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 func endpointOverrideFromPolicy(policy policyRule) (endpointOverrideRule, bool) {
 	policy.Name = strings.TrimSpace(policy.Name)
 	override := policy.Interface
@@ -535,6 +598,8 @@ func pluginRegistration() registration {
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "exclusive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Use this plugin as the exclusive frontend API key authenticator."},
 				{Name: "storage_path", Type: pluginapi.ConfigFieldTypeString, Description: "JSON state file for managed keys, counters, and recent usage events."},
+				{Name: "config_path", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPA config.yaml path used when manage_config_api_keys is enabled."},
+				{Name: "manage_config_api_keys", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Import top-level CPA config.yaml api-keys into Policy Hub and apply default limits."},
 				{Name: "fail_closed", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Reject plugin startup when persistent state cannot be loaded."},
 				{Name: "dry_run", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Record deny and mutation policy matches without enforcing deny or mutating requests/responses."},
 				{Name: "expose_limit_headers", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Add basic limiter headers to successful responses."},
