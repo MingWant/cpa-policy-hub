@@ -55,6 +55,7 @@ Server safety notes:
 - Do not use `allowed_providers` unless your model names include a provider prefix such as `openai/gpt-4.1` or the request path makes the provider unambiguous. If a provider allow-list is configured and the provider cannot be determined, the plugin rejects the request.
 - Policy request mutations intentionally cannot set or delete sensitive headers such as `Authorization`, `X-Api-Key`, `X-Goog-Api-Key`, `Cookie`, `Host`, or `Proxy-Authorization`.
 - The management page saves runtime key overrides to `storage_path`; it does not rewrite CPA `config.yaml`.
+- If CPA's normal passthrough path still expects the original frontend key, set `preserve_client_credentials: true`. The plugin authenticates/manages the key, then restores the original credential header for CPA's downstream handling.
 
 ## Final server-ready notes
 
@@ -161,6 +162,7 @@ plugins:
       traffic_enabled: true
       config_path: "config.yaml"
       manage_config_api_keys: true
+      preserve_client_credentials: true
       fail_closed: false
       default_daily_token_limit: 100000
       default_monthly_token_limit: 1000000

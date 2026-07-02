@@ -21,6 +21,7 @@ plugins:
       traffic_enabled: true
       config_path: "/CLIProxyAPI/config.yaml"
       manage_config_api_keys: true
+      preserve_client_credentials: true
       exclusive: true
       fail_closed: false
       dry_run: false

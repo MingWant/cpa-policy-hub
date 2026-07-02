@@ -12,6 +12,7 @@ plugins:
       exclusive: false
       config_path: ""
       manage_config_api_keys: false
+      preserve_client_credentials: false
       fail_closed: false
       dry_run: true
       expose_limit_headers: false
