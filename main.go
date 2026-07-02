@@ -957,7 +957,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 	path := strings.TrimSuffix(req.Path, "/")
 	resourcePrefix := "/v0/resource/plugins/" + pluginID
 	if req.Method == http.MethodGet && (path == resourcePrefix || path == resourcePrefix+"/index.html" || strings.HasPrefix(path, resourcePrefix+"/status")) {
-		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(statusHTML())})
+		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(statusHTMLPage())})
 	}
 	if strings.HasSuffix(path, "/status") && req.Method == http.MethodGet {
 		return managementStatus(req)
@@ -997,7 +997,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 
 func managementStatus(req managementRequest) ([]byte, error) {
 	if strings.Contains(req.Path, "/v0/resource/plugins/") {
-		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(statusHTML())})
+		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(statusHTMLPage())})
 	}
 	currentLimiter.mu.Lock()
 	defer currentLimiter.mu.Unlock()
@@ -1085,8 +1085,11 @@ func managementPatchKey(raw []byte) ([]byte, error) {
 	currentLimiter.mu.Lock()
 	existing, ok := currentLimiter.state.Keys[rule.ID]
 	if !ok {
+		existing, ok = currentLimiter.configuredKeys[rule.ID]
+	}
+	if !ok {
 		currentLimiter.mu.Unlock()
-		return okEnvelope(jsonResponse(http.StatusNotFound, map[string]any{"error": "managed key not found"}))
+		return okEnvelope(jsonResponse(http.StatusNotFound, map[string]any{"error": "key not found"}))
 	}
 	rule.Source = "managed"
 	if strings.TrimSpace(rule.Key) == "" && strings.TrimSpace(rule.KeyHash) == "" {
@@ -1122,7 +1125,10 @@ func managementDeleteKey(req managementRequest) ([]byte, error) {
 	currentLimiter.mu.Lock()
 	if _, ok := currentLimiter.state.Keys[id]; !ok {
 		currentLimiter.mu.Unlock()
-		return okEnvelope(jsonResponse(http.StatusNotFound, map[string]any{"error": "managed key not found"}))
+		if _, configured := currentLimiter.configuredKeys[id]; configured {
+			return okEnvelope(jsonResponse(http.StatusConflict, map[string]any{"error": "configured key has no runtime override to delete"}))
+		}
+		return okEnvelope(jsonResponse(http.StatusNotFound, map[string]any{"error": "key not found"}))
 	}
 	delete(currentLimiter.state.Keys, id)
 	errSave := currentLimiter.saveStateLocked()
@@ -1331,12 +1337,12 @@ func mergeState(dst *persistedState, src persistedState) {
 
 func (l *limiter) findKeyByCredentialLocked(credential string) (keyRule, bool) {
 	hash := hashAPIKey(credential)
-	for _, rule := range l.configuredKeys {
+	for _, rule := range l.state.Keys {
 		if hashMatches(rule.KeyHash, hash) {
 			return rule, true
 		}
 	}
-	for _, rule := range l.state.Keys {
+	for _, rule := range l.configuredKeys {
 		if hashMatches(rule.KeyHash, hash) {
 			return rule, true
 		}
@@ -1345,19 +1351,19 @@ func (l *limiter) findKeyByCredentialLocked(credential string) (keyRule, bool) {
 }
 
 func (l *limiter) resolveKeyIDLocked(value string) (string, bool) {
-	if _, ok := l.configuredKeys[value]; ok {
-		return value, true
-	}
 	if _, ok := l.state.Keys[value]; ok {
 		return value, true
 	}
+	if _, ok := l.configuredKeys[value]; ok {
+		return value, true
+	}
 	hash := hashAPIKey(value)
-	for _, rule := range l.configuredKeys {
+	for _, rule := range l.state.Keys {
 		if hashMatches(rule.KeyHash, hash) {
 			return rule.ID, true
 		}
 	}
-	for _, rule := range l.state.Keys {
+	for _, rule := range l.configuredKeys {
 		if hashMatches(rule.KeyHash, hash) {
 			return rule.ID, true
 		}
@@ -1366,10 +1372,10 @@ func (l *limiter) resolveKeyIDLocked(value string) (string, bool) {
 }
 
 func (l *limiter) keyRuleByIDLocked(keyID string) (keyRule, bool) {
-	if rule, ok := l.configuredKeys[keyID]; ok {
+	if rule, ok := l.state.Keys[keyID]; ok {
 		return rule, true
 	}
-	if rule, ok := l.state.Keys[keyID]; ok {
+	if rule, ok := l.configuredKeys[keyID]; ok {
 		return rule, true
 	}
 	return keyRule{}, false
@@ -2396,6 +2402,14 @@ func wildcardMatch(pattern, value string) bool {
 func (l *limiter) listKeysLocked() []keyListItem {
 	keys := make([]keyListItem, 0, len(l.configuredKeys)+len(l.state.Keys))
 	for _, rule := range l.configuredKeys {
+		if override, exists := l.state.Keys[rule.ID]; exists {
+			override.Source = "override"
+			override.KeyHash = maskHash(override.KeyHash)
+			override.Key = ""
+			keys = append(keys, keyListItem{keyRule: override, Usage: l.state.Usage[override.ID]})
+			continue
+		}
+		rule.Source = "config"
 		rule.KeyHash = maskHash(rule.KeyHash)
 		rule.Key = ""
 		keys = append(keys, keyListItem{keyRule: rule, Usage: l.state.Usage[rule.ID]})
@@ -2404,6 +2418,7 @@ func (l *limiter) listKeysLocked() []keyListItem {
 		if _, exists := l.configuredKeys[rule.ID]; exists {
 			continue
 		}
+		rule.Source = "managed"
 		rule.KeyHash = maskHash(rule.KeyHash)
 		rule.Key = ""
 		keys = append(keys, keyListItem{keyRule: rule, Usage: l.state.Usage[rule.ID]})
@@ -2724,6 +2739,26 @@ func htmlHeaders() http.Header {
 		"Referrer-Policy":         []string{"no-referrer"},
 		"Content-Security-Policy": []string{"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"},
 	}
+}
+
+func statusHTMLPage() string {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CPA Policy Hub</title><style>
+:root{color-scheme:dark;--bg:#020617;--panel:#0f172a;--card:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--blue:#38bdf8;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444}*{box-sizing:border-box}body{margin:0;font:14px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:linear-gradient(135deg,#020617,#111827 50%,#172554);color:var(--text)}header{padding:28px 32px 18px;border-bottom:1px solid rgba(255,255,255,.08)}h1{margin:0 0 8px;font-size:28px}h2{margin:0 0 10px}.muted{color:var(--muted)}main{padding:24px 32px 42px;display:grid;gap:18px}.bar,.grid,.split{display:grid;gap:16px}.bar{grid-template-columns:1fr auto}.grid{grid-template-columns:repeat(4,minmax(150px,1fr))}.split{grid-template-columns:minmax(520px,1.35fr) minmax(360px,.9fr)}.card{background:rgba(15,23,42,.86);border:1px solid rgba(148,163,184,.22);border-radius:18px;box-shadow:0 18px 50px rgba(0,0,0,.28);padding:18px}.stat{font-size:28px;font-weight:800;margin-top:4px}.pill{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--muted)}.ok{color:var(--ok);border-color:rgba(34,197,94,.45)}.warn{color:var(--warn);border-color:rgba(245,158,11,.45)}.bad{color:var(--bad);border-color:rgba(239,68,68,.45)}input,select,textarea,button{font:inherit;border-radius:10px;border:1px solid var(--line);background:#020617;color:var(--text);padding:10px 12px}textarea{width:100%;min-height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}button{cursor:pointer;background:#0f172a}button.primary{background:linear-gradient(135deg,#0284c7,#2563eb);border:0;font-weight:700}button.danger{border-color:rgba(239,68,68,.55);color:#fecaca}.form{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.form .full{grid-column:1/-1}label{display:grid;gap:6px;color:var(--muted)}label span{font-size:12px;text-transform:uppercase;letter-spacing:.04em}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid rgba(148,163,184,.18);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.actions{display:flex;gap:8px;flex-wrap:wrap}.tabs{display:flex;gap:8px;flex-wrap:wrap}.tab{padding:9px 12px}.tab.active{background:#1d4ed8}.hidden{display:none}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.notice{border-left:4px solid var(--blue);padding:10px 12px;background:rgba(56,189,248,.09);border-radius:12px}.toast{position:fixed;right:20px;bottom:20px;max-width:520px;background:#020617;border:1px solid var(--line);border-radius:14px;padding:12px 14px;box-shadow:0 20px 60px rgba(0,0,0,.35)}@media(max-width:1000px){.grid,.split,.bar{grid-template-columns:1fr}.form{grid-template-columns:1fr}}
+</style></head><body><header><h1>CPA Policy Hub</h1><div class="muted">Visual management for keys, quotas, usage and runtime state.</div></header><main>
+<section class="card bar"><label><span>Management key</span><input id="mk" type="password" autocomplete="off" placeholder="Paste CPA / CPAMC management key"></label><div class="actions" style="align-self:end"><button class="primary" onclick="connect()">Connect</button><button onclick="clearKey()">Clear</button></div></section>
+<section class="grid"><div class="card"><div class="muted">Traffic</div><div id="sTraffic" class="stat">-</div></div><div class="card"><div class="muted">Configured keys</div><div id="sConfigured" class="stat">-</div></div><div class="card"><div class="muted">Managed overrides</div><div id="sManaged" class="stat">-</div></div><div class="card"><div class="muted">Tracked keys</div><div id="sTracked" class="stat">-</div></div></section>
+<section class="card"><div class="tabs"><button class="tab active" data-tab="keys">Keys</button><button class="tab" data-tab="usage">Usage</button><button class="tab" data-tab="events">Events</button><button class="tab" data-tab="state">Backup</button><button class="tab" data-tab="config">Config helper</button></div></section>
+<section id="keys" class="view split"><div class="card"><div class="bar"><div><h2>Keys</h2><div class="muted">Edit imported CPA keys by saving a runtime override. Delete the override to fall back to config.yaml.</div></div><button onclick="loadAll()">Refresh</button></div><div style="overflow:auto"><table><thead><tr><th>Name</th><th>ID</th><th>Source</th><th>Limits</th><th>Usage</th><th></th></tr></thead><tbody id="keyRows"><tr><td colspan="6" class="muted">Connect first.</td></tr></tbody></table></div></div><div class="card"><h2 id="formTitle">Create / edit key</h2><div class="form"><label><span>ID</span><input id="fId" placeholder="auto for new key"></label><label><span>Name</span><input id="fName" placeholder="Team A"></label><label class="full"><span>Plain API key</span><input id="fKey" placeholder="Only needed when creating or replacing key material"></label><label><span>Daily tokens</span><input id="fDaily" type="number" min="0" placeholder="0 = unlimited"></label><label><span>Monthly tokens</span><input id="fMonthly" type="number" min="0" placeholder="0 = unlimited"></label><label><span>Total tokens</span><input id="fTotal" type="number" min="0" placeholder="0 = unlimited"></label><label><span>RPM</span><input id="fRpm" type="number" min="0" placeholder="requests/minute"></label><label class="full"><span>Allowed models</span><input id="fModels" placeholder="*, gpt-4o*, claude*"></label><label><span>Tenant</span><input id="fTenant"></label><label><span>Plan</span><input id="fPlan"></label><label><span>Disabled</span><select id="fDisabled"><option value="false">No</option><option value="true">Yes</option></select></label><label><span>Expires at</span><input id="fExpires" placeholder="2026-12-31T00:00:00Z"></label></div><div class="actions" style="margin-top:14px"><button class="primary" onclick="saveKey()">Save</button><button onclick="newKey()">New</button><button class="danger" onclick="deleteKey()">Delete override</button></div><div class="notice" style="margin-top:14px">For imported CPA <span class="mono">api-keys</span>, Save writes an override to <span class="mono">cpa-policy-hub-state.json</span>. It does not edit CPA <span class="mono">config.yaml</span>.</div><pre id="createdSecret" class="mono muted"></pre></div></section>
+<section id="usage" class="view card hidden"><div class="bar"><h2>Usage</h2><button onclick="loadUsage()">Refresh</button></div><div id="usageBox" class="mono muted">Connect first.</div></section>
+<section id="events" class="view card hidden"><div class="bar"><h2>Recent events</h2><button onclick="loadEvents()">Refresh</button></div><div id="eventsBox" class="mono muted">Connect first.</div></section>
+<section id="state" class="view card hidden"><h2>Backup / restore</h2><div class="actions"><button onclick="exportState()">Export state</button><button onclick="importState(false)">Import merge</button><button class="danger" onclick="importState(true)">Import replace</button></div><textarea id="stateText" placeholder="Exported state appears here"></textarea></section>
+<section id="config" class="view card hidden"><h2>Config helper</h2><p class="muted">Safe starter config. Enable traffic only after the plugin page works.</p><div class="actions"><button onclick="buildSafeConfig()">Generate safe config</button><button onclick="buildTakeoverConfig()">Generate takeover config</button></div><textarea id="configText"></textarea></section>
+</main><div id="toast" class="toast hidden"></div><script>
+const api='/v0/management/plugins/cpa-policy-hub';let managementKey='';let keys=[];const $=id=>document.getElementById(id);function toast(m,bad){const t=$('toast');t.textContent=m;t.className='toast '+(bad?'bad':'ok');setTimeout(()=>t.className='toast hidden',4200)}function pretty(v){return JSON.stringify(v,null,2)}function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}function csv(s){return String(s||'').split(',').map(x=>x.trim()).filter(Boolean)}function num(id){const v=$(id).value;return v===''?0:Number(v)}async function call(path,opt){if(!managementKey)throw new Error('management key required');opt=opt||{};opt.headers=Object.assign({'Authorization':'Bearer '+managementKey},opt.headers||{});if(opt.body&&!opt.headers['Content-Type'])opt.headers['Content-Type']='application/json';const r=await fetch(api+path,opt);const text=await r.text();let d;try{d=JSON.parse(text)}catch(e){throw new Error(text||r.status)}if(!r.ok)throw new Error(d.error||text||r.status);return d}
+function connect(){managementKey=$('mk').value.trim();if(!managementKey){toast('Paste management key first',true);return}loadAll()}function clearKey(){managementKey='';$('mk').value='';keys=[];renderKeys();toast('Cleared')}document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.view').forEach(v=>v.classList.toggle('hidden',v.id!==b.dataset.tab));});
+async function loadAll(){try{await loadStatus();await loadKeys();await loadUsage();await loadEvents()}catch(e){toast(String(e.message||e),true)}}async function loadStatus(){const s=await call('/status');$('sTraffic').textContent=s.traffic_enabled?'Enabled':'Off';$('sTraffic').className='stat '+(s.traffic_enabled?'ok':'warn');$('sConfigured').textContent=s.configured_keys||0;$('sManaged').textContent=s.managed_keys||0;$('sTracked').textContent=s.tracked_keys||0;if(s.config_load_error)toast('Config load error: '+s.config_load_error,true)}async function loadKeys(){const d=await call('/keys');keys=d.keys||[];renderKeys()}function renderKeys(){const tb=$('keyRows');if(!keys.length){tb.innerHTML='<tr><td colspan="6" class="muted">No keys loaded.</td></tr>';return}tb.innerHTML=keys.map(k=>{const u=k.usage||{};const limits='daily '+(k.daily_token_limit||0)+' / monthly '+(k.monthly_token_limit||0)+' / rpm '+(k.request_limit_per_minute||0);const usage='tokens '+(u.total_tokens||0)+' / requests '+(u.total_requests||0);return '<tr><td>'+esc(k.name||'-')+'</td><td class="mono">'+esc(k.id)+'</td><td><span class="pill '+(k.source==='config'?'warn':'ok')+'">'+esc(k.source||'managed')+'</span></td><td>'+esc(limits)+'</td><td>'+esc(usage)+'</td><td><button onclick="editKey(\''+esc(k.id)+'\')">Edit</button></td></tr>'}).join('')}function editKey(id){const k=keys.find(x=>x.id===id);if(!k)return;$('formTitle').textContent='Edit '+(k.name||id);$('fId').value=k.id||'';$('fName').value=k.name||'';$('fKey').value='';$('fDaily').value=k.daily_token_limit||0;$('fMonthly').value=k.monthly_token_limit||0;$('fTotal').value=k.total_token_limit||0;$('fRpm').value=k.request_limit_per_minute||0;$('fModels').value=(k.allowed_models||[]).join(', ');$('fTenant').value=k.tenant||'';$('fPlan').value=k.plan||'';$('fDisabled').value=k.disabled?'true':'false';$('fExpires').value=k.expires_at||'';$('createdSecret').textContent=''}function newKey(){$('formTitle').textContent='Create managed key';['fId','fName','fKey','fDaily','fMonthly','fTotal','fRpm','fModels','fTenant','fPlan','fExpires'].forEach(id=>$(id).value='');$('fDisabled').value='false';$('createdSecret').textContent=''}async function saveKey(){try{const body={id:$('fId').value.trim(),name:$('fName').value.trim(),key:$('fKey').value.trim(),daily_token_limit:num('fDaily'),monthly_token_limit:num('fMonthly'),total_token_limit:num('fTotal'),request_limit_per_minute:num('fRpm'),allowed_models:csv($('fModels').value),tenant:$('fTenant').value.trim(),plan:$('fPlan').value.trim(),disabled:$('fDisabled').value==='true',expires_at:$('fExpires').value.trim()};Object.keys(body).forEach(k=>{if(body[k]===''||(Array.isArray(body[k])&&!body[k].length))delete body[k]});const editing=!!body.id&&keys.some(k=>k.id===body.id);const d=await call('/keys',{method:editing?'PATCH':'POST',body:JSON.stringify(body)});if(d.api_key)$('createdSecret').textContent='Generated API key, copy now: '+d.api_key;toast(editing?'Saved override':'Created key');await loadAll();if((d.key||{}).id)editKey(d.key.id)}catch(e){toast(String(e.message||e),true)}}async function deleteKey(){const id=$('fId').value.trim();if(!id){toast('Select a key first',true);return}if(!confirm('Delete runtime override for '+id+'?'))return;try{await call('/keys?id='+encodeURIComponent(id),{method:'DELETE'});toast('Deleted override');newKey();await loadAll()}catch(e){toast(String(e.message||e),true)}}
+async function loadUsage(){try{const d=await call('/usage');$('usageBox').innerHTML='<pre class="mono">'+esc(pretty(d))+'</pre>'}catch(e){$('usageBox').textContent=String(e.message||e)}}async function loadEvents(){try{const e=await call('/events');const p=await call('/policy-log');$('eventsBox').innerHTML='<h3>Usage events</h3><pre class="mono">'+esc(pretty(e.events||[]))+'</pre><h3>Policy log</h3><pre class="mono">'+esc(pretty(p.events||[]))+'</pre>'}catch(e){$('eventsBox').textContent=String(e.message||e)}}async function exportState(){try{const d=await call('/export');$('stateText').value=pretty(d.state||{})}catch(e){toast(String(e.message||e),true)}}async function importState(replace){try{const state=JSON.parse($('stateText').value||'{}');await call('/import',{method:'POST',body:JSON.stringify({replace:!!replace,state})});toast('Imported');await loadAll()}catch(e){toast(String(e.message||e),true)}}function buildSafeConfig(){$('configText').value='plugins:\n  enabled: true\n  dir: "plugins"\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 100\n      storage_path: "cpa-policy-hub-state.json"\n      traffic_enabled: false\n      exclusive: false\n      manage_config_api_keys: false\n      fail_closed: false\n      dry_run: true\n      default_allowed_models: ["*"]\n      default_daily_token_limit: 0\n      default_monthly_token_limit: 0\n      default_request_limit_per_minute: 0\n      policies: []\n      endpoint_overrides: []\n'}function buildTakeoverConfig(){$('configText').value='plugins:\n  enabled: true\n  dir: "plugins"\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 1\n      storage_path: "cpa-policy-hub-state.json"\n      traffic_enabled: true\n      config_path: "/CLIProxyAPI/config.yaml"\n      manage_config_api_keys: true\n      exclusive: true\n      fail_closed: false\n      dry_run: false\n      default_allowed_models: ["*"]\n      default_daily_token_limit: 100000\n      default_monthly_token_limit: 1000000\n      default_request_limit_per_minute: 60\n      policies: []\n      endpoint_overrides: []\n'}buildSafeConfig();newKey();
+</script></body></html>`
 }
 
 func statusHTML() string {

@@ -396,8 +396,10 @@ The embedded browser UI is available at `/v0/resource/plugins/cpa-policy-hub/ind
 
 The UI includes:
 
-- Dashboard metrics
-- Managed key creation/deletion
+- Status cards for traffic mode and key counts
+- Table-based key browsing
+- Form-based managed key creation/editing/deletion
+- Form-based runtime overrides for imported CPA `api-keys`
 - Key usage, policy usage, and active counters
 - Usage events and policy log
 - Reset/export/import tools
@@ -405,7 +407,9 @@ The UI includes:
 
 The page itself is a static plugin resource and does not embed credentials. All data reads/writes go through `/v0/management/plugins/cpa-policy-hub/...`; if the current CPAMC/session cannot call the Management API, the UI will show an authorization or connectivity failure.
 
-Static config such as `pricing`, `policies`, and `auth.keys` is still applied from CPA `config.yaml`. The UI's Config Builder generates YAML snippets; copy them into `config.yaml` and restart CPA. Runtime state operations such as managed keys, reset, export, and import are saved by the plugin directly.
+When `manage_config_api_keys: true` is enabled, top-level CPA `api-keys` show up as `config` keys. Editing one in the UI saves a runtime override to `cpa-policy-hub-state.json`; it does not rewrite CPA `config.yaml`. Deleting that override makes the key fall back to the original `config.yaml` settings.
+
+Static config such as `pricing` and `policies` is still applied from CPA `config.yaml`. The UI's Config Builder generates YAML snippets; copy them into `config.yaml` and restart CPA. Runtime state operations such as managed keys, imported-key overrides, reset, export, and import are saved by the plugin directly.
 
 ### Reset counters
 
