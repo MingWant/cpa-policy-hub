@@ -56,6 +56,22 @@ Server safety notes:
 - Policy request mutations intentionally cannot set or delete sensitive headers such as `Authorization`, `X-Api-Key`, `X-Goog-Api-Key`, `Cookie`, `Host`, or `Proxy-Authorization`.
 - The management page saves runtime key overrides to `storage_path`; it does not rewrite CPA `config.yaml`.
 
+## Final server-ready notes
+
+This build is intended to be safe for server use with a conservative workflow:
+
+1. Start in management-only mode with `traffic_enabled: false`.
+2. Switch takeover mode on with `dry_run: true` and verify `/policy-log`.
+3. Switch `dry_run: false` only after auth, quota, provider/model limits, and interface overrides look correct.
+
+The embedded UI can manage runtime key overrides including model/provider limits, hourly limits, time windows, request/response rewrites, and friendly upstream error messages. These runtime overrides are stored in `storage_path` and do not edit CPA's `config.yaml`.
+
+Important behavior:
+
+- PATCH key operations preserve advanced fields that a simple client/UI omits.
+- `dry_run: true` prevents request/response mutations and interface override headers from being applied.
+- Per-key `error_response` rewrites upstream responses whose body looks like an error. The current CPA SDK response interceptor payload does not expose HTTP status in this plugin path, so status-only matching is not relied on.
+
 ## Config
 
 ```yaml

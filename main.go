@@ -573,7 +573,7 @@ func loadConfigAPIKeys(configPath string) ([]string, error) {
 	path := strings.TrimSpace(configPath)
 	paths := []string{path}
 	if path == "" {
-		paths = []string{"config.yaml", "./config.yaml", "/home/docker/CLIProxyAPI/config.yaml"}
+		paths = []string{"config.yaml", "./config.yaml", "/CLIProxyAPI/config.yaml", "/home/docker/CLIProxyAPI/config.yaml"}
 	}
 	var raw []byte
 	var errRead error
@@ -1088,7 +1088,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 	path := strings.TrimSuffix(req.Path, "/")
 	resourcePrefix := "/v0/resource/plugins/" + pluginID
 	if req.Method == http.MethodGet && (path == resourcePrefix || path == resourcePrefix+"/index.html" || strings.HasPrefix(path, resourcePrefix+"/status")) {
-		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(statusHTMLPage())})
+		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(finalStatusHTML())})
 	}
 	if strings.HasSuffix(path, "/status") && req.Method == http.MethodGet {
 		return managementStatus(req)
@@ -1128,7 +1128,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 
 func managementStatus(req managementRequest) ([]byte, error) {
 	if strings.Contains(req.Path, "/v0/resource/plugins/") {
-		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(statusHTMLPage())})
+		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(finalStatusHTML())})
 	}
 	currentLimiter.mu.Lock()
 	defer currentLimiter.mu.Unlock()
@@ -1227,6 +1227,7 @@ func managementPatchKey(raw []byte) ([]byte, error) {
 	if strings.TrimSpace(rule.Key) == "" && strings.TrimSpace(rule.KeyHash) == "" {
 		rule.KeyHash = existing.KeyHash
 	}
+	rule = mergeKeyRulePatch(existing, rule)
 	normalized, okNormalize := normalizeKeyRule(rule, currentLimiter.cfg, "managed")
 	if !okNormalize {
 		currentLimiter.mu.Unlock()
@@ -1244,6 +1245,52 @@ func managementPatchKey(raw []byte) ([]byte, error) {
 	}
 	normalized.KeyHash = maskHash(normalized.KeyHash)
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"key": normalized}))
+}
+
+func mergeKeyRulePatch(existing keyRule, patch keyRule) keyRule {
+	if patch.Name == "" {
+		patch.Name = existing.Name
+	}
+	if patch.Tenant == "" {
+		patch.Tenant = existing.Tenant
+	}
+	if patch.Plan == "" {
+		patch.Plan = existing.Plan
+	}
+	if patch.ExpiresAt == "" {
+		patch.ExpiresAt = existing.ExpiresAt
+	}
+	if len(patch.AllowedModels) == 0 {
+		patch.AllowedModels = existing.AllowedModels
+	}
+	if len(patch.DeniedModels) == 0 {
+		patch.DeniedModels = existing.DeniedModels
+	}
+	if len(patch.AllowedProviders) == 0 {
+		patch.AllowedProviders = existing.AllowedProviders
+	}
+	if len(patch.DeniedProviders) == 0 {
+		patch.DeniedProviders = existing.DeniedProviders
+	}
+	if len(patch.TimeWindows) == 0 {
+		patch.TimeWindows = existing.TimeWindows
+	}
+	if len(patch.EndpointOverrides) == 0 {
+		patch.EndpointOverrides = existing.EndpointOverrides
+	}
+	if !requestPolicyConfigured(patch.Request) {
+		patch.Request = existing.Request
+	}
+	if !responsePolicyConfigured(patch.Response) {
+		patch.Response = existing.Response
+	}
+	if !errorResponseConfigured(patch.ErrorResponse) {
+		patch.ErrorResponse = existing.ErrorResponse
+	}
+	if len(patch.Metadata) == 0 {
+		patch.Metadata = existing.Metadata
+	}
+	return patch
 }
 
 func managementDeleteKey(req managementRequest) ([]byte, error) {
@@ -3199,6 +3246,26 @@ func htmlHeaders() http.Header {
 		"Referrer-Policy":         []string{"no-referrer"},
 		"Content-Security-Policy": []string{"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"},
 	}
+}
+
+func finalStatusHTML() string {
+	return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CPA Policy Hub</title><style>
+:root{color-scheme:dark;--bg:#020617;--panel:#0f172a;--card:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--blue:#38bdf8;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444}*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:linear-gradient(135deg,#020617,#111827 55%,#172554);color:var(--text)}header{padding:26px 32px 16px;border-bottom:1px solid #ffffff14}h1{margin:0;font-size:28px}h2{margin:0 0 12px}.muted{color:var(--muted)}main{padding:22px 32px 42px;display:grid;gap:16px}.card{background:rgba(15,23,42,.9);border:1px solid rgba(148,163,184,.24);border-radius:18px;box-shadow:0 18px 50px #0006;padding:18px}.grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:14px}.split{display:grid;grid-template-columns:minmax(540px,1.2fr) minmax(420px,.8fr);gap:16px}.bar{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end}.stat{font-size:26px;font-weight:800}.pill{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:var(--muted)}.ok{color:var(--ok);border-color:#22c55e88}.warn{color:var(--warn);border-color:#f59e0b88}.bad{color:var(--bad);border-color:#ef444488}.tabs{display:flex;gap:8px;flex-wrap:wrap}.tab.active{background:#1d4ed8}button,input,select,textarea{font:inherit;border:1px solid var(--line);border-radius:10px;background:#020617;color:var(--text);padding:9px 11px}button{cursor:pointer;background:#0f172a}button.primary{background:linear-gradient(135deg,#0284c7,#2563eb);border:0;font-weight:700}button.danger{border-color:#ef444488;color:#fecaca}.actions{display:flex;gap:8px;flex-wrap:wrap}.form{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.full{grid-column:1/-1}label{display:grid;gap:5px;color:var(--muted)}label span{font-size:12px;text-transform:uppercase;letter-spacing:.04em}textarea{width:100%;min-height:112px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #94a3b82d;padding:9px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase}.hidden{display:none}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.notice{border-left:4px solid var(--blue);padding:10px 12px;background:#38bdf817;border-radius:12px}.toast{position:fixed;right:20px;bottom:20px;max-width:560px;background:#020617;border:1px solid var(--line);border-radius:14px;padding:12px 14px;box-shadow:0 20px 60px #0008}.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}@media(max-width:1100px){.grid,.split,.bar,.form,.two{grid-template-columns:1fr}}
+</style></head><body><header><h1>CPA Policy Hub</h1><div class="muted">Final server UI: keys, limits, overrides, usage, state backup and config snippets.</div></header><main>
+<section class="card bar"><label><span>Management key</span><input id="mk" type="password" autocomplete="off" placeholder="Paste CPA / CPAMC management key"></label><div class="actions"><button class="primary" onclick="connect()">Connect</button><button onclick="clearKey()">Clear</button><button onclick="loadAll()">Refresh</button></div></section>
+<section class="grid"><div class="card"><div class="muted">Traffic</div><div id="sTraffic" class="stat">-</div></div><div class="card"><div class="muted">Configured</div><div id="sConfigured" class="stat">-</div></div><div class="card"><div class="muted">Managed</div><div id="sManaged" class="stat">-</div></div><div class="card"><div class="muted">Policies</div><div id="sPolicies" class="stat">-</div></div></section>
+<section class="card"><div class="tabs"><button class="tab active" data-tab="keys">Keys</button><button class="tab" data-tab="usage">Usage</button><button class="tab" data-tab="events">Events</button><button class="tab" data-tab="state">Backup</button><button class="tab" data-tab="config">Config</button></div></section>
+<section id="keys" class="view split"><div class="card"><div class="bar"><div><h2>API Keys</h2><div class="muted">Imported CPA keys can be overridden here. Existing secret material is never shown.</div></div><button onclick="loadKeys()">Refresh</button></div><div style="overflow:auto"><table><thead><tr><th>Name</th><th>ID</th><th>Source</th><th>Limits</th><th>Policy</th><th>Usage</th><th></th></tr></thead><tbody id="keyRows"><tr><td colspan="7" class="muted">Connect first.</td></tr></tbody></table></div></div>
+<div class="card"><h2 id="formTitle">Create / edit key</h2><div class="form"><label><span>ID</span><input id="fId" placeholder="auto for new key"></label><label><span>Name</span><input id="fName" placeholder="Team A"></label><label class="full"><span>Plain API key</span><input id="fKey" placeholder="Only for create or replacing key material"></label><label><span>Daily tokens</span><input id="fDaily" type="number" min="0"></label><label><span>Monthly tokens</span><input id="fMonthly" type="number" min="0"></label><label><span>Total tokens</span><input id="fTotal" type="number" min="0"></label><label><span>Hourly tokens</span><input id="fHourlyTokens" type="number" min="0"></label><label><span>RPM</span><input id="fRpm" type="number" min="0"></label><label><span>Hourly requests</span><input id="fHourlyRequests" type="number" min="0"></label><label class="full"><span>Allowed models</span><input id="fModels" placeholder="*, openai/*, gpt-*"></label><label class="full"><span>Denied models</span><input id="fDeniedModels" placeholder="gpt-5-pro, *expensive*"></label><label><span>Allowed providers</span><input id="fAllowedProviders" placeholder="openai, claude"></label><label><span>Denied providers</span><input id="fDeniedProviders" placeholder="gemini"></label><label><span>Tenant</span><input id="fTenant"></label><label><span>Plan</span><input id="fPlan"></label><label><span>Disabled</span><select id="fDisabled"><option value="false">No</option><option value="true">Yes</option></select></label><label><span>Expires at</span><input id="fExpires" placeholder="2026-12-31T00:00:00Z"></label><label class="full"><span>Time windows JSON</span><textarea id="fWindows" placeholder='[{"timezone":"Asia/Shanghai","days":["weekday"],"start":"09:00","end":"23:00"}]'></textarea></label><label class="full"><span>Request override JSON</span><textarea id="fRequest" placeholder='{"set_model":"real-upstream-model","set_headers":{"X-Team":"team-a"}}'></textarea></label><label class="full"><span>Response override JSON</span><textarea id="fResponse" placeholder='{"set_headers":{"X-Policy-Hub":"team-a"}}'></textarea></label><label class="full"><span>Error response JSON</span><textarea id="fError" placeholder='{"message":"Upstream returned an error. Try another model."}'></textarea></label></div><div class="actions" style="margin-top:14px"><button class="primary" onclick="saveKey()">Save runtime override</button><button onclick="newKey()">New</button><button class="danger" onclick="deleteKey()">Delete override</button></div><div class="notice" style="margin-top:12px">Save writes to state file, not CPA config.yaml. Restart is usually not required for runtime overrides.</div><pre id="createdSecret" class="mono muted"></pre></div></section>
+<section id="usage" class="view card hidden"><div class="bar"><h2>Usage</h2><button onclick="loadUsage()">Refresh</button></div><pre id="usageBox" class="mono">Connect first.</pre></section>
+<section id="events" class="view card hidden"><div class="bar"><h2>Events / Policy log</h2><button onclick="loadEvents()">Refresh</button></div><pre id="eventsBox" class="mono">Connect first.</pre></section>
+<section id="state" class="view card hidden"><h2>Backup / Restore</h2><div class="actions"><button onclick="exportState()">Export state</button><button onclick="importState(false)">Import merge</button><button class="danger" onclick="importState(true)">Import replace</button></div><textarea id="stateText" style="min-height:320px"></textarea></section>
+<section id="config" class="view card hidden"><h2>Server config snippets</h2><p class="muted">Copy into CPA config.yaml. UI does not rewrite config.yaml.</p><div class="actions"><button onclick="buildSafeConfig()">Safe</button><button onclick="buildTakeoverConfig()">Takeover</button><button onclick="buildPolicyConfig()">Rewrite policy</button></div><textarea id="configText" style="min-height:360px"></textarea></section>
+</main><div id="toast" class="toast hidden"></div><script>
+const api='/v0/management/plugins/cpa-policy-hub';let managementKey='';let keys=[];const $=id=>document.getElementById(id);function toast(m,bad){const t=$('toast');t.textContent=m;t.className='toast '+(bad?'bad':'ok');setTimeout(()=>t.className='toast hidden',4500)}function pretty(v){return JSON.stringify(v,null,2)}function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}function escAttr(s){return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}function csv(s){return String(s||'').split(',').map(x=>x.trim()).filter(Boolean)}function num(id){const v=$(id).value;return v===''?0:Number(v)}function parseJSON(id,fallback){const v=$(id).value.trim();if(!v)return fallback;return JSON.parse(v)}function setJSON(id,v){$(id).value=v&&Object.keys(v).length?pretty(v):''}async function call(path,opt){if(!managementKey)throw new Error('management key required');opt=opt||{};opt.headers=Object.assign({'Authorization':'Bearer '+managementKey},opt.headers||{});if(opt.body&&!opt.headers['Content-Type'])opt.headers['Content-Type']='application/json';const r=await fetch(api+path,opt);const text=await r.text();let d;try{d=JSON.parse(text)}catch(e){throw new Error(text||r.status)}if(!r.ok)throw new Error(d.error||text||r.status);return d}
+function connect(){managementKey=$('mk').value.trim();if(!managementKey){toast('Paste management key first',true);return}loadAll()}function clearKey(){managementKey='';$('mk').value='';keys=[];renderKeys();toast('Cleared')}document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.view').forEach(v=>v.classList.toggle('hidden',v.id!==b.dataset.tab));});
+async function loadAll(){try{await loadStatus();await loadKeys();await loadUsage();await loadEvents()}catch(e){toast(String(e.message||e),true)}}async function loadStatus(){const s=await call('/status');$('sTraffic').textContent=s.traffic_enabled?'Enabled':'Off';$('sTraffic').className='stat '+(s.traffic_enabled?'ok':'warn');$('sConfigured').textContent=s.configured_keys||0;$('sManaged').textContent=s.managed_keys||0;$('sPolicies').textContent=s.policies||0;if(s.config_load_error)toast('Config load error: '+s.config_load_error,true)}async function loadKeys(){const d=await call('/keys');keys=d.keys||[];renderKeys()}function renderKeys(){const tb=$('keyRows');if(!keys.length){tb.innerHTML='<tr><td colspan="7" class="muted">No keys loaded.</td></tr>';return}tb.innerHTML=keys.map(k=>{const u=k.usage||{};const limits='d '+(k.daily_token_limit||0)+' / hTok '+(k.hourly_token_limit||0)+' / rpm '+(k.request_limit_per_minute||0)+' / hReq '+(k.hourly_request_limit||0);const pol='models '+esc((k.allowed_models||[]).join(','))+'<br>providers '+esc((k.allowed_providers||[]).join(','));const usage='tokens '+(u.total_tokens||0)+' / req '+(u.requests||0);return '<tr><td>'+esc(k.name||'-')+'</td><td class="mono">'+esc(k.id)+'</td><td><span class="pill '+(k.source==='config'?'warn':'ok')+'">'+esc(k.source||'managed')+'</span></td><td>'+esc(limits)+'</td><td>'+pol+'</td><td>'+esc(usage)+'</td><td><button onclick="editKey(\''+escAttr(k.id)+'\')">Edit</button></td></tr>'}).join('')}function editKey(id){const k=keys.find(x=>x.id===id);if(!k)return;$('formTitle').textContent='Edit '+(k.name||id);$('fId').value=k.id||'';$('fName').value=k.name||'';$('fKey').value='';$('fDaily').value=k.daily_token_limit||0;$('fMonthly').value=k.monthly_token_limit||0;$('fTotal').value=k.total_token_limit||0;$('fHourlyTokens').value=k.hourly_token_limit||0;$('fRpm').value=k.request_limit_per_minute||0;$('fHourlyRequests').value=k.hourly_request_limit||0;$('fModels').value=(k.allowed_models||[]).join(', ');$('fDeniedModels').value=(k.denied_models||[]).join(', ');$('fAllowedProviders').value=(k.allowed_providers||[]).join(', ');$('fDeniedProviders').value=(k.denied_providers||[]).join(', ');$('fTenant').value=k.tenant||'';$('fPlan').value=k.plan||'';$('fDisabled').value=k.disabled?'true':'false';$('fExpires').value=k.expires_at||'';$('fWindows').value=(k.time_windows||[]).length?pretty(k.time_windows):'';setJSON('fRequest',k.request||{});setJSON('fResponse',k.response||{});setJSON('fError',k.error_response||{});$('createdSecret').textContent=''}function newKey(){$('formTitle').textContent='Create managed key';['fId','fName','fKey','fDaily','fMonthly','fTotal','fHourlyTokens','fRpm','fHourlyRequests','fModels','fDeniedModels','fAllowedProviders','fDeniedProviders','fTenant','fPlan','fExpires','fWindows','fRequest','fResponse','fError'].forEach(id=>$(id).value='');$('fDisabled').value='false';$('createdSecret').textContent=''}async function saveKey(){try{const body={id:$('fId').value.trim(),name:$('fName').value.trim(),key:$('fKey').value.trim(),daily_token_limit:num('fDaily'),monthly_token_limit:num('fMonthly'),total_token_limit:num('fTotal'),hourly_token_limit:num('fHourlyTokens'),request_limit_per_minute:num('fRpm'),hourly_request_limit:num('fHourlyRequests'),allowed_models:csv($('fModels').value),denied_models:csv($('fDeniedModels').value),allowed_providers:csv($('fAllowedProviders').value),denied_providers:csv($('fDeniedProviders').value),tenant:$('fTenant').value.trim(),plan:$('fPlan').value.trim(),disabled:$('fDisabled').value==='true',expires_at:$('fExpires').value.trim(),time_windows:parseJSON('fWindows',[]),request:parseJSON('fRequest',{}),response:parseJSON('fResponse',{}),error_response:parseJSON('fError',{})};Object.keys(body).forEach(k=>{if(body[k]===''||(Array.isArray(body[k])&&!body[k].length)||(typeof body[k]==='object'&&body[k]&&!Array.isArray(body[k])&&!Object.keys(body[k]).length))delete body[k]});const editing=!!body.id&&keys.some(k=>k.id===body.id);const d=await call('/keys',{method:editing?'PATCH':'POST',body:JSON.stringify(body)});if(d.api_key)$('createdSecret').textContent='Generated API key, copy now: '+d.api_key;toast(editing?'Saved override':'Created key');await loadAll();if((d.key||{}).id)editKey(d.key.id)}catch(e){toast(String(e.message||e),true)}}async function deleteKey(){const id=$('fId').value.trim();if(!id){toast('Select a key first',true);return}if(!confirm('Delete runtime override for '+id+'?'))return;try{await call('/keys?id='+encodeURIComponent(id),{method:'DELETE'});toast('Deleted override');newKey();await loadAll()}catch(e){toast(String(e.message||e),true)}}
+async function loadUsage(){try{$('usageBox').textContent=pretty(await call('/usage'))}catch(e){$('usageBox').textContent=String(e.message||e)}}async function loadEvents(){try{const e=await call('/events');const p=await call('/policy-log');$('eventsBox').textContent=pretty({events:e.events||[],policy_log:p.policy_log||[]})}catch(e){$('eventsBox').textContent=String(e.message||e)}}async function exportState(){try{$('stateText').value=pretty((await call('/export')).state||{})}catch(e){toast(String(e.message||e),true)}}async function importState(replace){try{const state=JSON.parse($('stateText').value||'{}');await call('/import',{method:'POST',body:JSON.stringify({replace:!!replace,state})});toast('Imported');await loadAll()}catch(e){toast(String(e.message||e),true)}}function buildSafeConfig(){$('configText').value='plugins:\n  enabled: true\n  dir: "plugins"\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 100\n      storage_path: "cpa-policy-hub-state.json"\n      traffic_enabled: false\n      exclusive: false\n      manage_config_api_keys: false\n      fail_closed: false\n      dry_run: true\n      default_allowed_models: ["*"]\n      auth:\n        exclusive: false\n        keys: []\n      pricing: []\n      policies: []\n      endpoint_overrides: []\n'}function buildTakeoverConfig(){$('configText').value='api-keys:\n  - "sk-client-a"\n\nplugins:\n  enabled: true\n  dir: "plugins"\n  configs:\n    cpa-policy-hub:\n      enabled: true\n      priority: 1\n      storage_path: "cpa-policy-hub-state.json"\n      traffic_enabled: true\n      config_path: "/CLIProxyAPI/config.yaml"\n      manage_config_api_keys: true\n      exclusive: true\n      fail_closed: false\n      dry_run: true\n      default_allowed_models: ["*"]\n      default_daily_token_limit: 100000\n      default_monthly_token_limit: 1000000\n      default_request_limit_per_minute: 60\n      auth:\n        exclusive: true\n        keys: []\n      pricing: []\n      policies: []\n      endpoint_overrides: []\n'}function buildPolicyConfig(){$('configText').value='policies:\n  - name: "route-alias-to-responses"\n    match:\n      providers: ["openai"]\n      models: ["public-responses-alias"]\n      request_paths: ["/chat/completions"]\n    interface:\n      force_interface: "responses"\n    request:\n      set_model: "real-upstream-responses-model"\n'}buildSafeConfig();newKey();</script></body></html>`
 }
 
 func statusHTMLPage() string {
