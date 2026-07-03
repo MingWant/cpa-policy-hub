@@ -241,7 +241,7 @@ func computeRuntimeCapabilities(cfg pluginConfig, configuredKeys map[string]keyR
 		return capabilities{ManagementAPI: true}
 	}
 	hasAuthKeys := len(configuredKeys) > 0 || len(managedKeys) > 0
-	hasRequestPolicies := len(cfg.Policies) > 0 || len(cfg.EndpointOverrides) > 0 || anyKeyRequestPolicyLocked(configuredKeys) || anyKeyRequestPolicyLocked(managedKeys)
+	hasRequestPolicies := (cfg.PreserveClientCredentials && hasAuthKeys) || len(cfg.Policies) > 0 || len(cfg.EndpointOverrides) > 0 || anyKeyRequestPolicyLocked(configuredKeys) || anyKeyRequestPolicyLocked(managedKeys)
 	hasResponsePolicies := len(cfg.Policies) > 0 || cfg.ExposeLimitHeaders || anyKeyResponsePolicyLocked(configuredKeys) || anyKeyResponsePolicyLocked(managedKeys)
 	hasUsage := hasAuthKeys || len(cfg.Policies) > 0 || len(cfg.Pricing) > 0
 	return capabilities{

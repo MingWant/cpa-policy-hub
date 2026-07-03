@@ -2,6 +2,19 @@ package main
 
 import "strings"
 
+func accessMetadataMap(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	if access, ok := metadata["accessMetadata"].(map[string]any); ok {
+		return access
+	}
+	if access, ok := metadata["access_metadata"].(map[string]any); ok {
+		return access
+	}
+	return nil
+}
+
 func (r endpointOverrideRule) matchName() string {
 	name := strings.TrimSpace(r.Name)
 	if name != "" {
@@ -60,12 +73,7 @@ func keyIDFromMetadata(metadata map[string]any) string {
 	if metadata == nil {
 		return ""
 	}
-	if access, ok := metadata["accessMetadata"].(map[string]any); ok {
-		if keyID := stringFromAny(access["key_id"]); keyID != "" {
-			return keyID
-		}
-	}
-	if access, ok := metadata["access_metadata"].(map[string]any); ok {
+	if access := accessMetadataMap(metadata); access != nil {
 		if keyID := stringFromAny(access["key_id"]); keyID != "" {
 			return keyID
 		}
@@ -79,6 +87,11 @@ func keyIDFromMetadata(metadata map[string]any) string {
 func stringFromMetadata(metadata map[string]any, key string) string {
 	if metadata == nil {
 		return ""
+	}
+	if access := accessMetadataMap(metadata); access != nil {
+		if value := stringFromAny(access[key]); value != "" {
+			return value
+		}
 	}
 	return stringFromAny(metadata[key])
 }

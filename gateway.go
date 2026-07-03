@@ -24,8 +24,12 @@ func interceptRequest(raw []byte) ([]byte, error) {
 	body := append([]byte(nil), req.Body...)
 	dryRun := currentLimiter.dryRun()
 	ctx := requestPolicyContext(req)
-	if !dryRun {
-		applyClientCredentialPassthrough(req.Metadata, headers)
+	passthroughHeaders := http.Header{}
+	if applyClientCredentialPassthrough(req.Metadata, passthroughHeaders) {
+		for key, values := range passthroughHeaders {
+			copied := append([]string(nil), values...)
+			headers[key] = copied
+		}
 	}
 	if rule, ok := currentLimiter.keyRuleByID(ctx.KeyID); ok {
 		changed, errApply := applyRequestPolicy(rule.Request, headers, &clearHeaders, &body)
@@ -54,7 +58,10 @@ func interceptRequest(raw []byte) ([]byte, error) {
 	if dryRun {
 		body = append([]byte(nil), req.Body...)
 		clearHeaders = nil
-		headers = http.Header{}
+		headers = passthroughHeaders.Clone()
+		if headers == nil {
+			headers = http.Header{}
+		}
 		headers.Set("X-CLIProxy-Policy-Hub-Dry-Run", "true")
 	}
 	if !dryRun && req.ToFormat != "" {
