@@ -49,11 +49,18 @@ func configure(raw []byte) error {
 		cfg.Keys = append(configAPIKeyRules(clientAPIKeys), cfg.Keys...)
 	}
 	if cfg.ManageConfigAPIKeys {
-		hostKeys, errLoadKeys := loadConfigAPIKeys(cfg.ConfigPath)
+		hostKeys := append([]string(nil), req.Host.APIKeys...)
+		hostKeys = append(hostKeys, req.Host.APIKeysAlt...)
+		fileKeys, errLoadKeys := loadConfigAPIKeys(cfg.ConfigPath)
 		if errLoadKeys != nil {
-			configLoadError = errLoadKeys.Error()
-		} else {
-			cfg.Keys = append(configAPIKeyRules(hostKeys), cfg.Keys...)
+			if len(hostKeys) == 0 {
+				configLoadError = errLoadKeys.Error()
+			}
+		} else if len(fileKeys) > 0 {
+			hostKeys = append(hostKeys, fileKeys...)
+		}
+		if len(hostKeys) > 0 {
+			cfg.Keys = append(configAPIKeyRules(uniqueNonEmptyStrings(hostKeys)), cfg.Keys...)
 		}
 	}
 	configuredKeys := make(map[string]keyRule, len(cfg.Keys))

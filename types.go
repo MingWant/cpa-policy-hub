@@ -26,7 +26,9 @@ type lifecycleRequest struct {
 }
 
 type hostSummary struct {
-	ConfigPath string `json:"config_path"`
+	APIKeys    []string `json:"APIKeys"`
+	APIKeysAlt []string `json:"api_keys"`
+	ConfigPath string   `json:"config_path"`
 }
 
 type registration struct {
