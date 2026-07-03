@@ -21,7 +21,12 @@ type envelopeError struct {
 }
 
 type lifecycleRequest struct {
-	ConfigYAML []byte `json:"config_yaml"`
+	ConfigYAML []byte      `json:"config_yaml"`
+	Host       hostSummary `json:"host"`
+}
+
+type hostSummary struct {
+	ConfigPath string `json:"config_path"`
 }
 
 type registration struct {
@@ -50,6 +55,8 @@ type pluginConfig struct {
 	Exclusive                    bool                   `yaml:"exclusive" json:"exclusive"`
 	StoragePath                  string                 `yaml:"storage_path" json:"storage_path"`
 	ConfigPath                   string                 `yaml:"config_path" json:"config_path"`
+	ClientAPIKey                 string                 `yaml:"client_api_key" json:"client_api_key"`
+	ClientAPIKeyEnv              string                 `yaml:"client_api_key_env" json:"client_api_key_env"`
 	ManageConfigAPIKeys          bool                   `yaml:"manage_config_api_keys" json:"manage_config_api_keys"`
 	PreserveClientCredentials    bool                   `yaml:"preserve_client_credentials" json:"preserve_client_credentials"`
 	FailClosed                   bool                   `yaml:"fail_closed" json:"fail_closed"`
@@ -320,17 +327,17 @@ type policyEvent struct {
 }
 
 type limiter struct {
-	mu                sync.RWMutex
-	cfg               pluginConfig
-	configuredKeys    map[string]keyRule
-	credentialIndex   map[string]string
-	state             persistedState
-	configLoadError   string
-	dirty             bool
-	saveSignal        chan struct{}
-	stopSignal        chan struct{}
-	stopOnce          sync.Once
-	snapshot          atomic.Pointer[runtimeSnapshot]
+	mu              sync.RWMutex
+	cfg             pluginConfig
+	configuredKeys  map[string]keyRule
+	credentialIndex map[string]string
+	state           persistedState
+	configLoadError string
+	dirty           bool
+	saveSignal      chan struct{}
+	stopSignal      chan struct{}
+	stopOnce        sync.Once
+	snapshot        atomic.Pointer[runtimeSnapshot]
 }
 
 type runtimeSnapshot struct {
@@ -344,15 +351,15 @@ type runtimeSnapshot struct {
 }
 
 type requestDebugInfo struct {
-	MetadataTopKeys           []string `json:"metadata_top_keys,omitempty"`
-	AccessMetadataKeys        []string `json:"access_metadata_keys,omitempty"`
-	ResolvedKeyID             string   `json:"resolved_key_id,omitempty"`
-	ClientCredentialPresent   bool     `json:"client_credential_present"`
-	ClientCredentialSource    string   `json:"client_credential_source,omitempty"`
-	PassthroughHeaders        []string `json:"passthrough_headers,omitempty"`
-	DryRun                    bool     `json:"dry_run"`
-	ToFormat                  string   `json:"to_format,omitempty"`
-	RequestedModel            string   `json:"requested_model,omitempty"`
+	MetadataTopKeys         []string `json:"metadata_top_keys,omitempty"`
+	AccessMetadataKeys      []string `json:"access_metadata_keys,omitempty"`
+	ResolvedKeyID           string   `json:"resolved_key_id,omitempty"`
+	ClientCredentialPresent bool     `json:"client_credential_present"`
+	ClientCredentialSource  string   `json:"client_credential_source,omitempty"`
+	PassthroughHeaders      []string `json:"passthrough_headers,omitempty"`
+	DryRun                  bool     `json:"dry_run"`
+	ToFormat                string   `json:"to_format,omitempty"`
+	RequestedModel          string   `json:"requested_model,omitempty"`
 }
 
 type authDebugInfo struct {

@@ -225,9 +225,26 @@ func responsePolicyContext(req pluginapi.ResponseInterceptRequest) endpointOverr
 }
 
 func applyClientCredentialPassthrough(metadata map[string]any, headers http.Header) bool {
+	changed := false
+	if value := stringFromMetadata(metadata, "header_authorization"); value != "" {
+		headers.Set("Authorization", value)
+		changed = true
+	}
+	if value := stringFromMetadata(metadata, "header_api_key"); value != "" {
+		headers.Set("Api-Key", value)
+		changed = true
+	}
+	if value := stringFromMetadata(metadata, "header_x_api_key"); value != "" {
+		headers.Set("X-Api-Key", value)
+		changed = true
+	}
+	if value := stringFromMetadata(metadata, "header_x_goog_api_key"); value != "" {
+		headers.Set("X-Goog-Api-Key", value)
+		changed = true
+	}
 	credential := stringFromMetadata(metadata, "client_credential")
 	if credential == "" {
-		return false
+		return changed
 	}
 	source := strings.ToLower(stringFromMetadata(metadata, "client_credential_source"))
 	switch source {

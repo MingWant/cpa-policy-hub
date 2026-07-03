@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
@@ -38,10 +39,15 @@ func configure(raw []byte) error {
 	if strings.TrimSpace(cfg.StoragePath) == "" {
 		cfg.StoragePath = "cpa-policy-hub-state.json"
 	}
-	if cfg.TrafficEnabled && cfg.ManageConfigAPIKeys {
+	cfg.ConfigPath = resolveConfigPath(cfg.ConfigPath, req.Host.ConfigPath)
+	clientAPIKeys := configuredClientAPIKeys(cfg)
+	if cfg.TrafficEnabled && (cfg.ManageConfigAPIKeys || len(clientAPIKeys) > 0) {
 		cfg.PreserveClientCredentials = true
 	}
 	configLoadError := ""
+	if len(clientAPIKeys) > 0 {
+		cfg.Keys = append(configAPIKeyRules(clientAPIKeys), cfg.Keys...)
+	}
 	if cfg.ManageConfigAPIKeys {
 		hostKeys, errLoadKeys := loadConfigAPIKeys(cfg.ConfigPath)
 		if errLoadKeys != nil {
@@ -86,6 +92,41 @@ func configure(raw []byte) error {
 	currentLimiter.refreshRuntimeSnapshotLocked()
 	currentLimiter.mu.Unlock()
 	return nil
+}
+
+func resolveConfigPath(configPath string, hostConfigPath string) string {
+	path := strings.TrimSpace(configPath)
+	if path != "" {
+		return path
+	}
+	hostPath := strings.TrimSpace(hostConfigPath)
+	if hostPath != "" {
+		return hostPath
+	}
+	if exePath, errExecutable := os.Executable(); errExecutable == nil {
+		if dir := strings.TrimSpace(filepath.Dir(exePath)); dir != "" {
+			candidate := filepath.Join(dir, "config.yaml")
+			if _, errStat := os.Stat(candidate); errStat == nil {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func configuredClientAPIKeys(cfg pluginConfig) []string {
+	keys := []string{}
+	if key := strings.TrimSpace(cfg.ClientAPIKey); key != "" {
+		keys = append(keys, key)
+	}
+	envName := strings.TrimSpace(cfg.ClientAPIKeyEnv)
+	if envName == "" {
+		envName = "CPA_POLICY_HUB_CLIENT_API_KEY"
+	}
+	if key := strings.TrimSpace(os.Getenv(envName)); key != "" {
+		keys = append(keys, key)
+	}
+	return uniqueNonEmptyStrings(keys)
 }
 
 func normalizePolicyConfigAliases(cfg *pluginConfig) {
@@ -214,6 +255,8 @@ func pluginRegistration() registration {
 				{Name: "traffic_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Explicitly allow this plugin to participate in normal CPA traffic. Leave false for management-only mode."},
 				{Name: "storage_path", Type: pluginapi.ConfigFieldTypeString, Description: "JSON state file for managed keys, counters, and recent usage events."},
 				{Name: "config_path", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPA config.yaml path used when manage_config_api_keys is enabled."},
+				{Name: "client_api_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional frontend API key to authenticate and forward when the host config path is unavailable."},
+				{Name: "client_api_key_env", Type: pluginapi.ConfigFieldTypeString, Description: "Environment variable containing a frontend API key. Defaults to CPA_POLICY_HUB_CLIENT_API_KEY."},
 				{Name: "manage_config_api_keys", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Import top-level CPA config.yaml api-keys into Policy Hub and apply default limits."},
 				{Name: "preserve_client_credentials", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Forward the original frontend API key back to CPA after plugin authentication for passthrough-style deployments."},
 				{Name: "fail_closed", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Reject plugin startup when persistent state cannot be loaded."},

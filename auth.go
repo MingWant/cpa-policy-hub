@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -120,6 +121,7 @@ func authenticate(raw []byte) ([]byte, error) {
 		"source":          source,
 		"key_id":          rule.ID,
 	}
+	copyCredentialHeaders(req.Headers, metadata)
 	if preserveClientCredentials {
 		metadata["client_credential"] = credential
 		metadata["client_credential_source"] = source
@@ -141,10 +143,28 @@ func authenticate(raw []byte) ([]byte, error) {
 
 func reservedAuthMetadataKey(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "provider", "legacy_provider", "source", "key_id", "tenant", "plan", "client_credential", "client_credential_source":
+	case "provider", "legacy_provider", "source", "key_id", "tenant", "plan", "client_credential", "client_credential_source", "header_authorization", "header_api_key", "header_x_api_key", "header_x_goog_api_key":
 		return true
 	default:
 		return false
+	}
+}
+
+func copyCredentialHeaders(headers http.Header, metadata map[string]string) {
+	if metadata == nil || headers == nil {
+		return
+	}
+	if value := strings.TrimSpace(headers.Get("Authorization")); value != "" {
+		metadata["header_authorization"] = value
+	}
+	if value := strings.TrimSpace(headers.Get("Api-Key")); value != "" {
+		metadata["header_api_key"] = value
+	}
+	if value := strings.TrimSpace(headers.Get("X-Api-Key")); value != "" {
+		metadata["header_x_api_key"] = value
+	}
+	if value := strings.TrimSpace(headers.Get("X-Goog-Api-Key")); value != "" {
+		metadata["header_x_goog_api_key"] = value
 	}
 }
 

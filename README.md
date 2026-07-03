@@ -55,7 +55,7 @@ Server safety notes:
 - Do not use `allowed_providers` unless your model names include a provider prefix such as `openai/gpt-4.1` or the request path makes the provider unambiguous. If a provider allow-list is configured and the provider cannot be determined, the plugin rejects the request.
 - Policy request mutations intentionally cannot set or delete sensitive headers such as `Authorization`, `X-Api-Key`, `X-Goog-Api-Key`, `Cookie`, `Host`, or `Proxy-Authorization`.
 - The management page saves runtime key overrides to `storage_path`; it does not rewrite CPA `config.yaml`.
-- When `manage_config_api_keys: true` is enabled, the plugin automatically preserves the original client credential so CPA's downstream passthrough path still receives an API key after plugin authentication.
+- When `manage_config_api_keys: true` or `client_api_key` is enabled, the plugin automatically preserves the original client credential so CPA's downstream passthrough path still receives an API key after plugin authentication.
 
 ## Final server-ready notes
 
@@ -174,6 +174,18 @@ plugins:
 ```
 
   If the CPA process cannot find `config.yaml`, set `config_path` to the path visible inside the running CPA process/container. For Docker with `/CLIProxyAPI` as the container workdir, use `/CLIProxyAPI/config.yaml`; do not use the host path unless CPA runs directly on the host. See `examples/takeover.config.yaml` for a complete takeover-mode example.
+
+If `config.yaml` cannot be read in your deployment, configure a client key directly instead:
+
+```yaml
+plugins:
+  configs:
+    cpa-policy-hub:
+      traffic_enabled: true
+      client_api_key: "sk-client-a"
+      # Or set CPA_POLICY_HUB_CLIENT_API_KEY / client_api_key_env instead.
+      exclusive: true
+```
 
 Open the embedded management page at:
 
