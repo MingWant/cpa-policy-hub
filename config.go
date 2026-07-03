@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"strings"
 
@@ -300,6 +301,35 @@ func (l *limiter) trafficConfigEnabled() bool {
 func (l *limiter) debugLogEnabled() bool {
 	if snapshot := l.currentSnapshot(); snapshot != nil {
 		return snapshot.cfg.DebugLog
+	}
+	return false
+}
+
+func (l *limiter) snapshotKeyCount() int {
+	if snapshot := l.currentSnapshot(); snapshot != nil {
+		return len(snapshot.keyRules)
+	}
+	return 0
+}
+
+func (l *limiter) snapshotKeyHashes() []string {
+	if l == nil {
+		return nil
+	}
+	snapshot := l.currentSnapshot()
+	if snapshot == nil || len(snapshot.keyRules) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(snapshot.keyRules))
+	for _, rule := range snapshot.keyRules {
+		out = append(out, maskHash(rule.KeyHash))
+	}
+	return out
+}
+
+func (l *limiter) manageConfigAPIKeysEnabled() bool {
+	if snapshot := l.currentSnapshot(); snapshot != nil {
+		return snapshot.cfg.ManageConfigAPIKeys
 	}
 	return false
 }

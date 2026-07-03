@@ -355,6 +355,21 @@ type requestDebugInfo struct {
 	RequestedModel            string   `json:"requested_model,omitempty"`
 }
 
+type authDebugInfo struct {
+	Source             string   `json:"source,omitempty"`
+	RequestPath        string   `json:"request_path,omitempty"`
+	Provider           string   `json:"provider,omitempty"`
+	Model              string   `json:"model,omitempty"`
+	CredentialPresent  bool     `json:"credential_present"`
+	CredentialMasked   string   `json:"credential_masked,omitempty"`
+	CredentialHash     string   `json:"credential_hash,omitempty"`
+	MatchedKeyID       string   `json:"matched_key_id,omitempty"`
+	MatchedKeyHash     string   `json:"matched_key_hash,omitempty"`
+	LoadedKeyCount     int      `json:"loaded_key_count"`
+	LoadedKeyHashes    []string `json:"loaded_key_hashes,omitempty"`
+	ManageConfigAPIKey bool     `json:"manage_config_api_keys"`
+}
+
 type managementRequest struct {
 	pluginapi.ManagementRequest
 	HostCallbackID string `json:"host_callback_id,omitempty"`

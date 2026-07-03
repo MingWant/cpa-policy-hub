@@ -24,6 +24,20 @@ func authenticate(raw []byte) ([]byte, error) {
 	provider := providerFromRequest(req)
 	now := time.Now().UTC()
 	rule, ok := currentLimiter.keyRuleByCredential(credential)
+	currentLimiter.logAuthDebug(authDebugInfo{
+		Source:             source,
+		RequestPath:        normalizeEndpointPath(req.Path),
+		Provider:           provider,
+		Model:              model,
+		CredentialPresent:  credential != "",
+		CredentialMasked:   maskAPIKey(credential),
+		CredentialHash:     maskHash(hashAPIKey(credential)),
+		MatchedKeyID:       rule.ID,
+		MatchedKeyHash:     maskHash(rule.KeyHash),
+		LoadedKeyCount:     currentLimiter.snapshotKeyCount(),
+		LoadedKeyHashes:    currentLimiter.snapshotKeyHashes(),
+		ManageConfigAPIKey: currentLimiter.manageConfigAPIKeysEnabled(),
+	})
 	if !ok || !rule.usable(now) || !keyPolicyAllowed(rule, model, provider, now) {
 		currentLimiter.mu.Lock()
 		currentLimiter.appendEventLocked(usageEvent{At: time.Now().UTC(), Action: "auth_reject", Source: source, Provider: provider, Model: model, RequestPath: normalizeEndpointPath(req.Path), Failed: true})
@@ -131,4 +145,15 @@ func reservedAuthMetadataKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+func (l *limiter) logAuthDebug(info authDebugInfo) {
+	if l == nil || !l.debugLogEnabled() {
+		return
+	}
+	payload, errMarshal := json.Marshal(info)
+	if errMarshal != nil {
+		return
+	}
+	log.Printf("[%s] frontend_auth %s", pluginID, string(payload))
 }
