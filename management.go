@@ -122,6 +122,7 @@ func managementStatus(req managementRequest) ([]byte, error) {
 		"config_path":                 currentLimiter.cfg.ConfigPath,
 		"manage_config_api_keys":      currentLimiter.cfg.ManageConfigAPIKeys,
 		"preserve_client_credentials": currentLimiter.cfg.PreserveClientCredentials,
+		"debug_log":                   currentLimiter.cfg.DebugLog,
 		"config_load_error":           configLoadError,
 		"policies":                    len(currentLimiter.cfg.Policies),
 		"endpoint_rules":              len(currentLimiter.cfg.EndpointOverrides),

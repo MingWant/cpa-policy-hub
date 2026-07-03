@@ -6,8 +6,6 @@ func normalizeAnyMap(value any) map[string]any {
 	switch typed := value.(type) {
 	case map[string]any:
 		return typed
-	case map[string]interface{}:
-		return typed
 	case map[string]string:
 		out := make(map[string]any, len(typed))
 		for key, value := range typed {
@@ -17,6 +15,17 @@ func normalizeAnyMap(value any) map[string]any {
 	default:
 		return nil
 	}
+}
+
+func mapKeys(values map[string]any) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
+	return out
 }
 
 func accessMetadataMap(metadata map[string]any) map[string]any {

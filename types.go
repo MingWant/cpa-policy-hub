@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,6 +56,7 @@ type pluginConfig struct {
 	FailClosed                   bool                   `yaml:"fail_closed" json:"fail_closed"`
 	DryRun                       bool                   `yaml:"dry_run" json:"dry_run"`
 	ExposeLimitHeaders           bool                   `yaml:"expose_limit_headers" json:"expose_limit_headers"`
+	DebugLog                     bool                   `yaml:"debug_log" json:"debug_log"`
 	DefaultDailyTokenLimit       int64                  `yaml:"default_daily_token_limit" json:"default_daily_token_limit"`
 	DefaultMonthlyTokenLimit     int64                  `yaml:"default_monthly_token_limit" json:"default_monthly_token_limit"`
 	DefaultTotalTokenLimit       int64                  `yaml:"default_total_token_limit" json:"default_total_token_limit"`
@@ -340,6 +342,18 @@ type runtimeSnapshot struct {
 	capabilities    capabilities
 	configuredCount int
 	managedCount    int
+}
+
+type requestDebugInfo struct {
+	MetadataTopKeys           []string `json:"metadata_top_keys,omitempty"`
+	AccessMetadataKeys        []string `json:"access_metadata_keys,omitempty"`
+	ResolvedKeyID             string   `json:"resolved_key_id,omitempty"`
+	ClientCredentialPresent   bool     `json:"client_credential_present"`
+	ClientCredentialSource    string   `json:"client_credential_source,omitempty"`
+	PassthroughHeaders        []string `json:"passthrough_headers,omitempty"`
+	DryRun                    bool     `json:"dry_run"`
+	ToFormat                  string   `json:"to_format,omitempty"`
+	RequestedModel            string   `json:"requested_model,omitempty"`
 }
 
 type managementRequest struct {

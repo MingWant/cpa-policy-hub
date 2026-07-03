@@ -216,6 +216,7 @@ func pluginRegistration() registration {
 				{Name: "fail_closed", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Reject plugin startup when persistent state cannot be loaded."},
 				{Name: "dry_run", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Record deny and mutation policy matches without enforcing deny or mutating requests/responses."},
 				{Name: "expose_limit_headers", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Add basic limiter headers to successful responses."},
+				{Name: "debug_log", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Emit lightweight debug logs for auth and passthrough troubleshooting."},
 				{Name: "default_daily_token_limit", Type: pluginapi.ConfigFieldTypeInteger, Description: "Default daily token quota for keys without a per-key value. Zero means unlimited."},
 				{Name: "default_monthly_token_limit", Type: pluginapi.ConfigFieldTypeInteger, Description: "Default monthly token quota for keys without a per-key value. Zero means unlimited."},
 				{Name: "default_total_token_limit", Type: pluginapi.ConfigFieldTypeInteger, Description: "Default lifetime token quota for keys without a per-key value. Zero means unlimited."},
@@ -292,6 +293,13 @@ func anyKeyResponsePolicyLocked(keys map[string]keyRule) bool {
 func (l *limiter) trafficConfigEnabled() bool {
 	if snapshot := l.currentSnapshot(); snapshot != nil {
 		return snapshot.cfg.TrafficEnabled
+	}
+	return false
+}
+
+func (l *limiter) debugLogEnabled() bool {
+	if snapshot := l.currentSnapshot(); snapshot != nil {
+		return snapshot.cfg.DebugLog
 	}
 	return false
 }

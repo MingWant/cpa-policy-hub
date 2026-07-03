@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -31,6 +32,17 @@ func interceptRequest(raw []byte) ([]byte, error) {
 			headers[key] = copied
 		}
 	}
+	currentLimiter.logRequestDebug("request_intercept", req.Metadata, requestDebugInfo{
+		MetadataTopKeys:         mapKeys(req.Metadata),
+		AccessMetadataKeys:      mapKeys(accessMetadataMap(req.Metadata)),
+		ResolvedKeyID:           ctx.KeyID,
+		ClientCredentialPresent: stringFromMetadata(req.Metadata, "client_credential") != "",
+		ClientCredentialSource:  stringFromMetadata(req.Metadata, "client_credential_source"),
+		PassthroughHeaders:      passthroughHeaders.Keys(),
+		DryRun:                  dryRun,
+		ToFormat:                req.ToFormat,
+		RequestedModel:          req.RequestedModel,
+	})
 	if rule, ok := currentLimiter.keyRuleByID(ctx.KeyID); ok {
 		changed, errApply := applyRequestPolicy(rule.Request, headers, &clearHeaders, &body)
 		if errApply != nil {
@@ -77,6 +89,18 @@ func interceptRequest(raw []byte) ([]byte, error) {
 		response.Body = body
 	}
 	return okEnvelope(response)
+}
+
+func (l *limiter) logRequestDebug(stage string, metadata map[string]any, info requestDebugInfo) {
+	if l == nil || !l.debugLogEnabled() {
+		return
+	}
+	payload, errMarshal := json.Marshal(info)
+	if errMarshal != nil {
+		log.Printf("[%s] debug marshal error: %v", pluginID, errMarshal)
+		return
+	}
+	log.Printf("[%s] %s %s", pluginID, stage, fmt.Sprintf("%s", payload))
 }
 
 func (l *limiter) keyRuleByID(keyID string) (keyRule, bool) {
