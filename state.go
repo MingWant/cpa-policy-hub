@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -118,6 +119,17 @@ func cloneStringMap(values map[string]string) map[string]string {
 	out := make(map[string]string, len(values))
 	for key, value := range values {
 		out[key] = value
+	}
+	return out
+}
+
+func cloneHeader(values http.Header) http.Header {
+	if values == nil {
+		return nil
+	}
+	out := make(http.Header, len(values))
+	for key, value := range values {
+		out[key] = append([]string(nil), value...)
 	}
 	return out
 }

@@ -38,6 +38,9 @@ func configure(raw []byte) error {
 	if strings.TrimSpace(cfg.StoragePath) == "" {
 		cfg.StoragePath = "cpa-policy-hub-state.json"
 	}
+	if cfg.TrafficEnabled && cfg.ManageConfigAPIKeys {
+		cfg.PreserveClientCredentials = true
+	}
 	configLoadError := ""
 	if cfg.ManageConfigAPIKeys {
 		hostKeys, errLoadKeys := loadConfigAPIKeys(cfg.ConfigPath)

@@ -12,6 +12,7 @@ plugins:
       exclusive: false
       config_path: ""
       manage_config_api_keys: false
+      # Automatically forced on when manage_config_api_keys is true.
       preserve_client_credentials: false
       fail_closed: false
       dry_run: true

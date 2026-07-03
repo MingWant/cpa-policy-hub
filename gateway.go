@@ -14,13 +14,16 @@ import (
 
 func interceptRequest(raw []byte) ([]byte, error) {
 	if !currentLimiter.trafficConfigEnabled() {
-		return okEnvelope(pluginapi.RequestInterceptResponse{})
+		return okEnvelope(pluginapi.RequestInterceptResponse{Headers: http.Header{}})
 	}
 	var req pluginapi.RequestInterceptRequest
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	headers := http.Header{}
+	headers := cloneHeader(req.Headers)
+	if headers == nil {
+		headers = http.Header{}
+	}
 	headers.Set("X-CLIProxy-Policy-Hub", pluginID)
 	clearHeaders := []string{}
 	body := append([]byte(nil), req.Body...)
@@ -71,9 +74,12 @@ func interceptRequest(raw []byte) ([]byte, error) {
 	if dryRun {
 		body = append([]byte(nil), req.Body...)
 		clearHeaders = nil
-		headers = passthroughHeaders.Clone()
+		headers = cloneHeader(req.Headers)
 		if headers == nil {
 			headers = http.Header{}
+		}
+		for key, values := range passthroughHeaders {
+			headers[key] = append([]string(nil), values...)
 		}
 		headers.Set("X-CLIProxy-Policy-Hub-Dry-Run", "true")
 	}
