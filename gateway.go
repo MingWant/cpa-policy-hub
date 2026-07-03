@@ -76,9 +76,11 @@ func (l *limiter) keyRuleByID(keyID string) (keyRule, bool) {
 	if l == nil || strings.TrimSpace(keyID) == "" {
 		return keyRule{}, false
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.keyRuleByIDLocked(keyID)
+	if snapshot := l.currentSnapshot(); snapshot != nil {
+		rule, ok := snapshot.keyRules[keyID]
+		return rule, ok
+	}
+	return keyRule{}, false
 }
 
 func interceptResponse(raw []byte) ([]byte, error) {
@@ -124,9 +126,10 @@ func interceptResponse(raw []byte) ([]byte, error) {
 		headers = http.Header{}
 		headers.Set("X-CLIProxy-Policy-Hub-Dry-Run", "true")
 	}
-	currentLimiter.mu.Lock()
-	expose := currentLimiter.cfg.ExposeLimitHeaders
-	currentLimiter.mu.Unlock()
+	expose := false
+	if snapshot := currentLimiter.currentSnapshot(); snapshot != nil {
+		expose = snapshot.cfg.ExposeLimitHeaders
+	}
 	if expose {
 		headers.Set("X-CLIProxy-Policy-Hub", pluginID)
 	}

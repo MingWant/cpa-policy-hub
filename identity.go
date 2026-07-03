@@ -10,17 +10,43 @@ import (
 	"time"
 )
 
+func (l *limiter) keyRuleByCredential(credential string) (keyRule, bool) {
+	if l == nil {
+		return keyRule{}, false
+	}
+	snapshot := l.currentSnapshot()
+	if snapshot == nil {
+		return keyRule{}, false
+	}
+	hash := normalizeHash(hashAPIKey(credential))
+	keyID, ok := snapshot.credentialIndex[hash]
+	if !ok {
+		return keyRule{}, false
+	}
+	rule, ok := snapshot.keyRules[keyID]
+	return rule, ok
+}
+
+func (l *limiter) resolveKeyID(value string) (string, bool) {
+	if l == nil {
+		return "", false
+	}
+	snapshot := l.currentSnapshot()
+	if snapshot == nil {
+		return "", false
+	}
+	if _, ok := snapshot.keyRules[value]; ok {
+		return value, true
+	}
+	hash := normalizeHash(hashAPIKey(value))
+	keyID, ok := snapshot.credentialIndex[hash]
+	return keyID, ok
+}
+
 func (l *limiter) findKeyByCredentialLocked(credential string) (keyRule, bool) {
 	hash := hashAPIKey(credential)
-	for _, rule := range l.state.Keys {
-		if hashMatches(rule.KeyHash, hash) {
-			return rule, true
-		}
-	}
-	for _, rule := range l.configuredKeys {
-		if hashMatches(rule.KeyHash, hash) {
-			return rule, true
-		}
+	if keyID, ok := l.credentialIndex[normalizeHash(hash)]; ok {
+		return l.keyRuleByIDLocked(keyID)
 	}
 	return keyRule{}, false
 }
@@ -33,15 +59,8 @@ func (l *limiter) resolveKeyIDLocked(value string) (string, bool) {
 		return value, true
 	}
 	hash := hashAPIKey(value)
-	for _, rule := range l.state.Keys {
-		if hashMatches(rule.KeyHash, hash) {
-			return rule.ID, true
-		}
-	}
-	for _, rule := range l.configuredKeys {
-		if hashMatches(rule.KeyHash, hash) {
-			return rule.ID, true
-		}
+	if keyID, ok := l.credentialIndex[normalizeHash(hash)]; ok {
+		return keyID, true
 	}
 	return "", false
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -318,11 +319,27 @@ type policyEvent struct {
 }
 
 type limiter struct {
-	mu              sync.Mutex
+	mu                sync.RWMutex
+	cfg               pluginConfig
+	configuredKeys    map[string]keyRule
+	credentialIndex   map[string]string
+	state             persistedState
+	configLoadError   string
+	dirty             bool
+	saveSignal        chan struct{}
+	stopSignal        chan struct{}
+	stopOnce          sync.Once
+	snapshot          atomic.Pointer[runtimeSnapshot]
+}
+
+type runtimeSnapshot struct {
 	cfg             pluginConfig
-	configuredKeys  map[string]keyRule
-	state           persistedState
+	keyRules        map[string]keyRule
+	credentialIndex map[string]string
 	configLoadError string
+	capabilities    capabilities
+	configuredCount int
+	managedCount    int
 }
 
 type managementRequest struct {

@@ -95,15 +95,26 @@ func managementStatus(req managementRequest) ([]byte, error) {
 	if strings.Contains(req.Path, "/v0/resource/plugins/") {
 		return okEnvelope(pluginapi.ManagementResponse{StatusCode: http.StatusOK, Headers: htmlHeaders(), Body: []byte(finalStatusHTML())})
 	}
-	currentLimiter.mu.Lock()
-	defer currentLimiter.mu.Unlock()
+	snapshot := currentLimiter.currentSnapshot()
+	currentLimiter.mu.RLock()
+	defer currentLimiter.mu.RUnlock()
 	trafficEnabled := currentLimiter.trafficEnabledLocked()
+	configLoadError := currentLimiter.configLoadError
+	configuredKeys := len(currentLimiter.configuredKeys)
+	managedKeys := len(currentLimiter.state.Keys)
+	capabilities := currentLimiter.runtimeCapabilitiesLocked()
+	if snapshot != nil {
+		configLoadError = snapshot.configLoadError
+		configuredKeys = snapshot.configuredCount
+		managedKeys = snapshot.managedCount
+		capabilities = snapshot.capabilities
+	}
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
 		"plugin":                      pluginID,
 		"name":                        pluginDisplayName,
 		"legacy_plugin":               legacyPluginID,
 		"version":                     pluginVersion,
-		"capabilities":                currentLimiter.runtimeCapabilitiesLocked(),
+		"capabilities":                capabilities,
 		"traffic_enabled":             trafficEnabled,
 		"traffic_config_enabled":      currentLimiter.cfg.TrafficEnabled,
 		"exclusive":                   currentLimiter.cfg.Exclusive,
@@ -111,11 +122,11 @@ func managementStatus(req managementRequest) ([]byte, error) {
 		"config_path":                 currentLimiter.cfg.ConfigPath,
 		"manage_config_api_keys":      currentLimiter.cfg.ManageConfigAPIKeys,
 		"preserve_client_credentials": currentLimiter.cfg.PreserveClientCredentials,
-		"config_load_error":           currentLimiter.configLoadError,
+		"config_load_error":           configLoadError,
 		"policies":                    len(currentLimiter.cfg.Policies),
 		"endpoint_rules":              len(currentLimiter.cfg.EndpointOverrides),
-		"configured_keys":             len(currentLimiter.configuredKeys),
-		"managed_keys":                len(currentLimiter.state.Keys),
+		"configured_keys":             configuredKeys,
+		"managed_keys":                managedKeys,
 		"tracked_keys":                len(currentLimiter.state.Usage),
 		"policy_events":               len(currentLimiter.state.PolicyLog),
 		"policy_counters":             len(currentLimiter.state.Policies),
@@ -125,8 +136,8 @@ func managementStatus(req managementRequest) ([]byte, error) {
 }
 
 func managementListKeys() ([]byte, error) {
-	currentLimiter.mu.Lock()
-	defer currentLimiter.mu.Unlock()
+	currentLimiter.mu.RLock()
+	defer currentLimiter.mu.RUnlock()
 	keys := currentLimiter.listKeysLocked()
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"keys": keys}))
 }
@@ -162,9 +173,10 @@ func managementCreateKey(raw []byte) ([]byte, error) {
 	}
 	normalized.Key = ""
 	currentLimiter.state.Keys[normalized.ID] = normalized
-	errSave := currentLimiter.saveStateLocked()
+	currentLimiter.rebuildCredentialIndexLocked()
+	currentLimiter.markDirtyLocked()
 	currentLimiter.mu.Unlock()
-	if errSave != nil {
+	if errSave := currentLimiter.flushStateNow(); errSave != nil {
 		return nil, errSave
 	}
 	normalized.KeyHash = maskHash(normalized.KeyHash)
@@ -204,9 +216,10 @@ func managementPatchKey(raw []byte) ([]byte, error) {
 		return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": "id cannot be changed by patch"}))
 	}
 	currentLimiter.state.Keys[normalized.ID] = normalized
-	errSave := currentLimiter.saveStateLocked()
+	currentLimiter.rebuildCredentialIndexLocked()
+	currentLimiter.markDirtyLocked()
 	currentLimiter.mu.Unlock()
-	if errSave != nil {
+	if errSave := currentLimiter.flushStateNow(); errSave != nil {
 		return nil, errSave
 	}
 	normalized.KeyHash = maskHash(normalized.KeyHash)
@@ -283,9 +296,10 @@ func managementDeleteKey(req managementRequest) ([]byte, error) {
 		return okEnvelope(jsonResponse(http.StatusNotFound, map[string]any{"error": "key not found"}))
 	}
 	delete(currentLimiter.state.Keys, id)
-	errSave := currentLimiter.saveStateLocked()
+	currentLimiter.rebuildCredentialIndexLocked()
+	currentLimiter.markDirtyLocked()
 	currentLimiter.mu.Unlock()
-	if errSave != nil {
+	if errSave := currentLimiter.flushStateNow(); errSave != nil {
 		return nil, errSave
 	}
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"deleted": id}))
@@ -293,8 +307,8 @@ func managementDeleteKey(req managementRequest) ([]byte, error) {
 
 func managementUsage(req managementRequest) ([]byte, error) {
 	id := strings.TrimSpace(req.Query.Get("id"))
-	currentLimiter.mu.Lock()
-	defer currentLimiter.mu.Unlock()
+	currentLimiter.mu.RLock()
+	defer currentLimiter.mu.RUnlock()
 	if id != "" {
 		return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"id": id, "usage": currentLimiter.state.Usage[id].clone()}))
 	}
@@ -308,8 +322,8 @@ func managementEvents(req managementRequest) ([]byte, error) {
 			limit = parsed
 		}
 	}
-	currentLimiter.mu.Lock()
-	defer currentLimiter.mu.Unlock()
+	currentLimiter.mu.RLock()
+	defer currentLimiter.mu.RUnlock()
 	events := currentLimiter.state.Events
 	if len(events) > limit {
 		events = events[len(events)-limit:]
@@ -324,8 +338,8 @@ func managementPolicyLog(req managementRequest) ([]byte, error) {
 			limit = parsed
 		}
 	}
-	currentLimiter.mu.Lock()
-	defer currentLimiter.mu.Unlock()
+	currentLimiter.mu.RLock()
+	defer currentLimiter.mu.RUnlock()
 	events := currentLimiter.state.PolicyLog
 	if len(events) > limit {
 		events = events[len(events)-limit:]
@@ -344,7 +358,6 @@ func managementReset(req managementRequest) ([]byte, error) {
 		return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": "target is required"}))
 	}
 	currentLimiter.mu.Lock()
-	defer currentLimiter.mu.Unlock()
 	switch strings.ToLower(reset.Target) {
 	case "active":
 		if reset.ID != "" {
@@ -378,22 +391,30 @@ func managementReset(req managementRequest) ([]byte, error) {
 		if reset.ID != "" {
 			delete(currentLimiter.state.Keys, reset.ID)
 		} else {
+			currentLimiter.mu.Unlock()
 			return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": "resetting all managed keys requires target managed_keys_all"}))
 		}
 	case "managed_keys_all":
+		currentLimiter.mu.Unlock()
 		return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": "bulk managed key deletion is not supported by reset; delete keys individually"}))
 	default:
+		currentLimiter.mu.Unlock()
 		return okEnvelope(jsonResponse(http.StatusBadRequest, map[string]any{"error": "unsupported target"}))
 	}
-	if errSave := currentLimiter.saveStateLocked(); errSave != nil {
+	if reset.Target == "keys" || reset.Target == "managed_keys" || reset.Target == "managed_keys_all" {
+		currentLimiter.rebuildCredentialIndexLocked()
+	}
+	currentLimiter.markDirtyLocked()
+	currentLimiter.mu.Unlock()
+	if errSave := currentLimiter.flushStateNow(); errSave != nil {
 		return nil, errSave
 	}
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"reset": reset.Target, "id": reset.ID}))
 }
 
 func managementExport() ([]byte, error) {
-	currentLimiter.mu.Lock()
-	defer currentLimiter.mu.Unlock()
+	currentLimiter.mu.RLock()
+	defer currentLimiter.mu.RUnlock()
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{
 		"plugin":  pluginID,
 		"version": pluginVersion,
@@ -422,10 +443,11 @@ func managementImport(raw []byte) ([]byte, error) {
 	} else {
 		mergeState(&currentLimiter.state, request.State)
 	}
-	if errSave := currentLimiter.saveStateLocked(); errSave != nil {
-		currentLimiter.mu.Unlock()
+	currentLimiter.rebuildCredentialIndexLocked()
+	currentLimiter.markDirtyLocked()
+	currentLimiter.mu.Unlock()
+	if errSave := currentLimiter.flushStateNow(); errSave != nil {
 		return nil, errSave
 	}
-	currentLimiter.mu.Unlock()
 	return okEnvelope(jsonResponse(http.StatusOK, map[string]any{"imported": true, "replace": request.Replace}))
 }

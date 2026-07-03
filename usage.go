@@ -24,7 +24,12 @@ func handleUsage(raw []byte) ([]byte, error) {
 	if !record.RequestedAt.IsZero() {
 		now = record.RequestedAt.UTC()
 	}
+	if resolved, ok := currentLimiter.resolveKeyID(keyID); ok {
+		keyID = resolved
+	}
+	cost := currentLimiter.usageCost(record)
 	currentLimiter.mu.Lock()
+	failClosed := currentLimiter.cfg.FailClosed
 	if resolved, ok := currentLimiter.resolveKeyIDLocked(keyID); ok {
 		keyID = resolved
 	}
@@ -63,7 +68,6 @@ func handleUsage(raw []byte) ([]byte, error) {
 	if record.Model != "" {
 		usage.Models[record.Model] += tokens
 	}
-	cost := currentLimiter.usageCost(record)
 	if cost > 0 {
 		usage.TotalCost += cost
 		usage.DailyCost[dayKey(now)] += cost
@@ -82,10 +86,14 @@ func handleUsage(raw []byte) ([]byte, error) {
 		OutputTokens: record.Detail.OutputTokens,
 		Failed:       record.Failed,
 	})
-	errSave := currentLimiter.saveStateLocked()
+	currentLimiter.markDirtyLocked()
 	currentLimiter.mu.Unlock()
-	if errSave != nil {
-		return nil, errSave
+	if failClosed {
+		if errSave := currentLimiter.flushStateNow(); errSave != nil {
+			return nil, errSave
+		}
+	} else {
+		currentLimiter.requestStateSave()
 	}
 	return okEnvelope(struct{}{})
 }

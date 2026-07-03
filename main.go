@@ -85,7 +85,9 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 }
 
 //export cliproxyPluginShutdown
-func cliproxyPluginShutdown() {}
+func cliproxyPluginShutdown() {
+	currentLimiter.shutdown()
+}
 
 func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {

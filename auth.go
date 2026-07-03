@@ -23,55 +23,80 @@ func authenticate(raw []byte) ([]byte, error) {
 	model := requestedModel(req.Body)
 	provider := providerFromRequest(req)
 	now := time.Now().UTC()
+	rule, ok := currentLimiter.keyRuleByCredential(credential)
+	if !ok || !rule.usable(now) || !keyPolicyAllowed(rule, model, provider, now) {
+		currentLimiter.mu.Lock()
+		currentLimiter.appendEventLocked(usageEvent{At: time.Now().UTC(), Action: "auth_reject", Source: source, Provider: provider, Model: model, RequestPath: normalizeEndpointPath(req.Path), Failed: true})
+		currentLimiter.markDirtyLocked()
+		currentLimiter.mu.Unlock()
+		currentLimiter.requestStateSave()
+		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
+	}
 	currentLimiter.mu.Lock()
-	rule, ok := currentLimiter.findKeyByCredentialLocked(credential)
+	rule, ok = currentLimiter.keyRuleByIDLocked(rule.ID)
 	if !ok || !rule.usable(now) || !keyPolicyAllowed(rule, model, provider, now) {
 		currentLimiter.appendEventLocked(usageEvent{At: time.Now().UTC(), Action: "auth_reject", Source: source, Provider: provider, Model: model, RequestPath: normalizeEndpointPath(req.Path), Failed: true})
-		_ = currentLimiter.saveStateLocked()
+		currentLimiter.markDirtyLocked()
 		currentLimiter.mu.Unlock()
+		currentLimiter.requestStateSave()
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
 	usage := currentLimiter.ensureUsageLocked(rule.ID)
 	if !withinQuota(rule, usage, now) || !currentLimiter.allowRequestLocked(rule, usage, now) {
 		currentLimiter.appendEventLocked(usageEvent{At: time.Now().UTC(), KeyID: rule.ID, Action: "quota_reject", Source: source, Provider: provider, Model: model, RequestPath: normalizeEndpointPath(req.Path), Failed: true})
-		_ = currentLimiter.saveStateLocked()
+		currentLimiter.markDirtyLocked()
 		currentLimiter.mu.Unlock()
+		currentLimiter.requestStateSave()
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
 	ctx := endpointOverrideContext{KeyID: rule.ID, Provider: provider, Model: model, RequestedModel: model, RequestPath: normalizeEndpointPath(req.Path)}
 	denied, deniedPolicy, deniedMessage, dryRun := currentLimiter.authDenyDecisionLocked(ctx)
 	if denied && !dryRun {
 		currentLimiter.appendPolicyEventLocked(policyEvent{At: time.Now().UTC(), Policy: deniedPolicy, Action: "deny", KeyID: rule.ID, Model: model, RequestPath: ctx.RequestPath, Message: deniedMessage})
-		_ = currentLimiter.saveStateLocked()
+		currentLimiter.markDirtyLocked()
 		currentLimiter.mu.Unlock()
+		currentLimiter.requestStateSave()
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
 	if denied && dryRun {
 		currentLimiter.appendPolicyEventLocked(policyEvent{At: time.Now().UTC(), Policy: deniedPolicy, Action: "would_deny", KeyID: rule.ID, Model: model, RequestPath: ctx.RequestPath, DryRun: true, Message: deniedMessage})
+		currentLimiter.markDirtyLocked()
 	}
 	quotaDenied, quotaPolicy, quotaMessage, quotaDryRun := currentLimiter.policyQuotaDecisionLocked(ctx, rule, now)
 	if quotaDenied && !quotaDryRun {
 		currentLimiter.appendPolicyEventLocked(policyEvent{At: time.Now().UTC(), Policy: quotaPolicy, Action: "quota_deny", KeyID: rule.ID, Model: model, RequestPath: ctx.RequestPath, Message: quotaMessage})
-		_ = currentLimiter.saveStateLocked()
+		currentLimiter.markDirtyLocked()
 		currentLimiter.mu.Unlock()
+		currentLimiter.requestStateSave()
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
 	if quotaDenied && quotaDryRun {
 		currentLimiter.appendPolicyEventLocked(policyEvent{At: time.Now().UTC(), Policy: quotaPolicy, Action: "would_quota_deny", KeyID: rule.ID, Model: model, RequestPath: ctx.RequestPath, DryRun: true, Message: quotaMessage})
+		currentLimiter.markDirtyLocked()
 	}
 	concurrencyDenied, concurrencyPolicy, concurrencyMessage, concurrencyDryRun := currentLimiter.policyConcurrencyDecisionLocked(ctx, rule)
 	if concurrencyDenied && !concurrencyDryRun {
 		currentLimiter.appendPolicyEventLocked(policyEvent{At: time.Now().UTC(), Policy: concurrencyPolicy, Action: "concurrency_deny", KeyID: rule.ID, Model: model, RequestPath: ctx.RequestPath, Message: concurrencyMessage})
-		_ = currentLimiter.saveStateLocked()
+		currentLimiter.markDirtyLocked()
 		currentLimiter.mu.Unlock()
+		currentLimiter.requestStateSave()
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
 	if concurrencyDenied && concurrencyDryRun {
 		currentLimiter.appendPolicyEventLocked(policyEvent{At: time.Now().UTC(), Policy: concurrencyPolicy, Action: "would_concurrency_deny", KeyID: rule.ID, Model: model, RequestPath: ctx.RequestPath, DryRun: true, Message: concurrencyMessage})
+		currentLimiter.markDirtyLocked()
 	}
-	errSave := currentLimiter.saveStateLocked()
+	currentLimiter.markDirtyLocked()
+	failClosed := currentLimiter.cfg.FailClosed
+	preserveClientCredentials := currentLimiter.cfg.PreserveClientCredentials
 	currentLimiter.mu.Unlock()
-	if errSave != nil && currentLimiter.cfg.FailClosed {
+	var errSave error
+	if failClosed {
+		errSave = currentLimiter.flushStateNow()
+	} else {
+		currentLimiter.requestStateSave()
+	}
+	if errSave != nil && failClosed {
 		return okEnvelope(pluginapi.FrontendAuthResponse{Authenticated: false})
 	}
 	metadata := map[string]string{
@@ -80,7 +105,7 @@ func authenticate(raw []byte) ([]byte, error) {
 		"source":          source,
 		"key_id":          rule.ID,
 	}
-	if currentLimiter.cfg.PreserveClientCredentials {
+	if preserveClientCredentials {
 		metadata["client_credential"] = credential
 		metadata["client_credential_source"] = source
 	}

@@ -13,18 +13,18 @@ func (l *limiter) endpointOverride(req pluginapi.RequestInterceptRequest) (strin
 	if l == nil {
 		return "", ""
 	}
+	snapshot := l.currentSnapshot()
+	if snapshot == nil {
+		return "", ""
+	}
 	keyID := keyIDFromMetadata(req.Metadata)
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	var rules []endpointOverrideRule
 	if keyID != "" {
-		if rule, ok := l.configuredKeys[keyID]; ok {
-			rules = append(rules, rule.EndpointOverrides...)
-		} else if rule, ok := l.state.Keys[keyID]; ok {
+		if rule, ok := snapshot.keyRules[keyID]; ok {
 			rules = append(rules, rule.EndpointOverrides...)
 		}
 	}
-	rules = append(rules, l.cfg.EndpointOverrides...)
+	rules = append(rules, snapshot.cfg.EndpointOverrides...)
 	ctx := endpointOverrideContext{
 		KeyID:          keyID,
 		Provider:       providerFromFormat(req.ToFormat),
@@ -188,9 +188,11 @@ func (l *limiter) matchingPolicies(ctx endpointOverrideContext) []policyRule {
 	if l == nil {
 		return nil
 	}
-	l.mu.Lock()
-	policies := append([]policyRule(nil), l.cfg.Policies...)
-	l.mu.Unlock()
+	snapshot := l.currentSnapshot()
+	if snapshot == nil {
+		return nil
+	}
+	policies := snapshot.cfg.Policies
 	matched := make([]policyRule, 0, len(policies))
 	for _, policy := range policies {
 		if policy.matches(ctx) {

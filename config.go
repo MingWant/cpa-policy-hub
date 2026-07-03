@@ -11,6 +11,14 @@ import (
 )
 
 func configure(raw []byte) error {
+	if errFlush := currentLimiter.flushStateNow(); errFlush != nil {
+		currentLimiter.mu.RLock()
+		failClosed := currentLimiter.cfg.FailClosed
+		currentLimiter.mu.RUnlock()
+		if failClosed {
+			return errFlush
+		}
+	}
 	cfg := pluginConfig{
 		StoragePath:          "cpa-policy-hub-state.json",
 		DefaultAllowedModels: []string{"*"},
@@ -71,6 +79,8 @@ func configure(raw []byte) error {
 	currentLimiter.configLoadError = configLoadError
 	currentLimiter.configuredKeys = configuredKeys
 	currentLimiter.state = state
+	currentLimiter.dirty = false
+	currentLimiter.refreshRuntimeSnapshotLocked()
 	currentLimiter.mu.Unlock()
 	return nil
 }
@@ -187,9 +197,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 func pluginRegistration() registration {
-	currentLimiter.mu.Lock()
-	runtimeCapabilities := currentLimiter.runtimeCapabilitiesLocked()
-	currentLimiter.mu.Unlock()
+	runtimeCapabilities := currentLimiter.runtimeCapabilities()
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
@@ -228,22 +236,39 @@ func (l *limiter) trafficEnabledLocked() bool {
 	return caps.FrontendAuthProvider || caps.RequestInterceptor || caps.ResponseInterceptor || caps.UsagePlugin
 }
 
-func (l *limiter) runtimeCapabilitiesLocked() capabilities {
-	if !l.cfg.TrafficEnabled {
+func computeRuntimeCapabilities(cfg pluginConfig, configuredKeys map[string]keyRule, managedKeys map[string]keyRule) capabilities {
+	if !cfg.TrafficEnabled {
 		return capabilities{ManagementAPI: true}
 	}
-	hasAuthKeys := len(l.configuredKeys) > 0 || len(l.state.Keys) > 0
-	hasRequestPolicies := len(l.cfg.Policies) > 0 || len(l.cfg.EndpointOverrides) > 0 || anyKeyRequestPolicyLocked(l.configuredKeys) || anyKeyRequestPolicyLocked(l.state.Keys)
-	hasResponsePolicies := len(l.cfg.Policies) > 0 || l.cfg.ExposeLimitHeaders || anyKeyResponsePolicyLocked(l.configuredKeys) || anyKeyResponsePolicyLocked(l.state.Keys)
-	hasUsage := hasAuthKeys || len(l.cfg.Policies) > 0 || len(l.cfg.Pricing) > 0
+	hasAuthKeys := len(configuredKeys) > 0 || len(managedKeys) > 0
+	hasRequestPolicies := len(cfg.Policies) > 0 || len(cfg.EndpointOverrides) > 0 || anyKeyRequestPolicyLocked(configuredKeys) || anyKeyRequestPolicyLocked(managedKeys)
+	hasResponsePolicies := len(cfg.Policies) > 0 || cfg.ExposeLimitHeaders || anyKeyResponsePolicyLocked(configuredKeys) || anyKeyResponsePolicyLocked(managedKeys)
+	hasUsage := hasAuthKeys || len(cfg.Policies) > 0 || len(cfg.Pricing) > 0
 	return capabilities{
 		FrontendAuthProvider:          hasAuthKeys,
-		FrontendAuthProviderExclusive: hasAuthKeys && l.cfg.Exclusive,
+		FrontendAuthProviderExclusive: hasAuthKeys && cfg.Exclusive,
 		RequestInterceptor:            hasRequestPolicies,
 		ResponseInterceptor:           hasResponsePolicies,
 		UsagePlugin:                   hasUsage,
 		ManagementAPI:                 true,
 	}
+}
+
+func (l *limiter) runtimeCapabilitiesLocked() capabilities {
+	if snapshot := l.snapshot.Load(); snapshot != nil {
+		return snapshot.capabilities
+	}
+	return computeRuntimeCapabilities(l.cfg, l.configuredKeys, l.state.Keys)
+}
+
+func (l *limiter) runtimeCapabilities() capabilities {
+	if l == nil {
+		return capabilities{ManagementAPI: true}
+	}
+	if snapshot := l.currentSnapshot(); snapshot != nil {
+		return snapshot.capabilities
+	}
+	return capabilities{ManagementAPI: true}
 }
 
 func anyKeyRequestPolicyLocked(keys map[string]keyRule) bool {
@@ -265,7 +290,8 @@ func anyKeyResponsePolicyLocked(keys map[string]keyRule) bool {
 }
 
 func (l *limiter) trafficConfigEnabled() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.cfg.TrafficEnabled
+	if snapshot := l.currentSnapshot(); snapshot != nil {
+		return snapshot.cfg.TrafficEnabled
+	}
+	return false
 }

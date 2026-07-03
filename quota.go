@@ -337,17 +337,19 @@ func (l *limiter) recordPolicyEvent(event policyEvent) {
 	}
 	l.mu.Lock()
 	l.appendPolicyEventLocked(event)
-	_ = l.saveStateLocked()
+	l.markDirtyLocked()
 	l.mu.Unlock()
+	l.requestStateSave()
 }
 
 func (l *limiter) dryRun() bool {
 	if l == nil {
 		return false
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.cfg.DryRun
+	if snapshot := l.currentSnapshot(); snapshot != nil {
+		return snapshot.cfg.DryRun
+	}
+	return false
 }
 
 func (l *limiter) authDenyDecisionLocked(ctx endpointOverrideContext) (bool, string, string, bool) {
