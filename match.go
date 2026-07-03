@@ -2,14 +2,31 @@ package main
 
 import "strings"
 
+func normalizeAnyMap(value any) map[string]any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed
+	case map[string]interface{}:
+		return typed
+	case map[string]string:
+		out := make(map[string]any, len(typed))
+		for key, value := range typed {
+			out[key] = value
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func accessMetadataMap(metadata map[string]any) map[string]any {
 	if metadata == nil {
 		return nil
 	}
-	if access, ok := metadata["accessMetadata"].(map[string]any); ok {
+	if access := normalizeAnyMap(metadata["accessMetadata"]); access != nil {
 		return access
 	}
-	if access, ok := metadata["access_metadata"].(map[string]any); ok {
+	if access := normalizeAnyMap(metadata["access_metadata"]); access != nil {
 		return access
 	}
 	return nil
