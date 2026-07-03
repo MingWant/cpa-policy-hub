@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -38,7 +39,7 @@ func interceptRequest(raw []byte) ([]byte, error) {
 		ResolvedKeyID:           ctx.KeyID,
 		ClientCredentialPresent: stringFromMetadata(req.Metadata, "client_credential") != "",
 		ClientCredentialSource:  stringFromMetadata(req.Metadata, "client_credential_source"),
-		PassthroughHeaders:      passthroughHeaders.Keys(),
+		PassthroughHeaders:      headerKeys(passthroughHeaders),
 		DryRun:                  dryRun,
 		ToFormat:                req.ToFormat,
 		RequestedModel:          req.RequestedModel,
@@ -101,6 +102,17 @@ func (l *limiter) logRequestDebug(stage string, metadata map[string]any, info re
 		return
 	}
 	log.Printf("[%s] %s %s", pluginID, stage, fmt.Sprintf("%s", payload))
+}
+
+func headerKeys(values http.Header) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
+	return out
 }
 
 func (l *limiter) keyRuleByID(keyID string) (keyRule, bool) {
